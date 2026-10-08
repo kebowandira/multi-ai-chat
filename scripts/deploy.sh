@@ -12,8 +12,12 @@ fi
 
 python3 scripts/configure.py
 
-echo "validating Caddy configuration..."
-docker compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile
+if grep -qE '^COMPOSE_PROFILES=.*\bstandalone\b' .env; then
+  echo "validating Caddy configuration (standalone profile active)..."
+  docker compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile
+else
+  echo "standalone profile not active; skipping bundled Caddy (deploying behind an existing reverse proxy — see .env.example)."
+fi
 
 echo "pulling images..."
 docker compose pull --quiet || true  # tolerate images already pinned to a digest with no pull needed

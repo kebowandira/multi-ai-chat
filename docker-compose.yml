@@ -19,6 +19,7 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    profiles: ["standalone"]
     ports:
       - "80:80"
       - "443:443"
@@ -52,6 +53,12 @@ services:
       MONGO_URI: mongodb://librechat:${MONGO_APP_PASSWORD}@mongodb:27017/LibreChat?authSource=LibreChat
       MEILI_HOST: http://meilisearch:7700
       RAG_API_URL: http://rag_api:8000
+    ports:
+      # Always bound to localhost only. In standalone mode the bundled Caddy
+      # reaches this over the internal network anyway — this is for the
+      # "behind an existing reverse proxy on the host" mode (COMPOSE_PROFILES
+      # without "standalone"): point that proxy's site-block at 127.0.0.1:3080.
+      - "127.0.0.1:3080:3080"
     volumes:
       - ./runtime/librechat.yaml:/app/librechat.yaml:ro
       - librechat_uploads:/app/uploads

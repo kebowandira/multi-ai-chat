@@ -24,6 +24,36 @@ git submodule add <this-repo-url> stack
 Run `scripts/deploy.sh` etc. from inside `stack/`, with `.env` placed at
 `stack/.env` (never committed, in either repo).
 
+## Deploying behind an existing reverse proxy on the host
+
+Two modes, chosen by whether `standalone` is in `COMPOSE_PROFILES` (see
+`.env.example`):
+
+- **Standalone** (`COMPOSE_PROFILES=standalone`, the default): the bundled
+  Caddy container owns host ports 80/443 and handles TLS itself. Use this
+  on a host with nothing else listening on those ports.
+- **Shared host** (`standalone` omitted from `COMPOSE_PROFILES`): the
+  bundled Caddy never starts. `librechat` is always published to
+  `127.0.0.1:3080` regardless of this setting — point the host's existing
+  reverse proxy at that address instead. For an existing Caddy install,
+  add a new site-block (don't edit the existing one) so it's the import
+  pattern that survives the existing config's own changes:
+
+  ```caddyfile
+  # /etc/caddy/sites-enabled/ai.example.com (adjust to match how the
+  # existing Caddyfile imports this directory)
+  ai.example.com {
+      reverse_proxy 127.0.0.1:3080 {
+          flush_interval -1   # LibreChat streams SSE; don't buffer it
+      }
+  }
+  ```
+
+  Then reload the existing Caddy (`systemctl reload caddy` or
+  `caddy reload --config /etc/caddy/Caddyfile`), not restart — a reload
+  picks up the new site-block without dropping connections to sites
+  already being served.
+
 ## Backups
 
 `scripts/backup.py` is a **cold** backup: it stops `librechat` and `rag_api`
