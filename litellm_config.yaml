@@ -1,0 +1,91 @@
+# Source template. scripts/configure.py compiles this into
+# runtime/litellm_config.yaml: it drops any model_list entry whose api_key
+# environment variable is unset/blank, then injects router_settings.fallbacks
+# built from router/routing-policy.json so the two files cannot drift apart.
+# Edit model definitions here; edit priority/fallback order in
+# router/routing-policy.json.
+
+model_list:
+  - model_name: claude-code
+    litellm_params:
+      model: anthropic/${ANTHROPIC_MODELS}
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: openai-main
+    litellm_params:
+      model: openai/${OPENAI_MODELS}
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: openai-low-cost
+    litellm_params:
+      model: openai/${OPENAI_MODELS}
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gemini-flash
+    litellm_params:
+      model: gemini/${GOOGLE_MODELS}
+      api_key: os.environ/GOOGLE_KEY
+
+  - model_name: gemini-flash-lite
+    litellm_params:
+      model: gemini/${GOOGLE_MODELS}
+      api_key: os.environ/GOOGLE_KEY
+
+  - model_name: deepseek-fast
+    litellm_params:
+      model: openai/${DEEPSEEK_FAST_MODEL}
+      api_base: ${DEEPSEEK_BASE_URL}
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  - model_name: deepseek-pro
+    litellm_params:
+      model: openai/${DEEPSEEK_PRO_MODEL}
+      api_base: ${DEEPSEEK_BASE_URL}
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  - model_name: qwen-turbo
+    litellm_params:
+      model: openai/${QWEN_TURBO_MODEL}
+      api_base: ${DASHSCOPE_BASE_URL}
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  - model_name: qwen-plus
+    litellm_params:
+      model: openai/${QWEN_PLUS_MODEL}
+      api_base: ${DASHSCOPE_BASE_URL}
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  - model_name: glm-manual
+    litellm_params:
+      model: openai/${ZAI_MODEL}
+      api_base: ${ZAI_BASE_URL}
+      api_key: os.environ/ZAI_API_KEY
+
+  - model_name: grok-manual
+    litellm_params:
+      model: openai/${XAI_MODEL}
+      api_base: ${XAI_BASE_URL}
+      api_key: os.environ/XAI_API_KEY
+
+  # Route aliases. scripts/configure.py adds one entry per alias in
+  # router/routing-policy.json, pointed at that route's first available
+  # provider, plus a model_list entry for "auto" cloned from the default
+  # route. router_settings.fallbacks (below) carries the rest of each chain.
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  num_retries: 1
+  request_timeout: 120
+  # Deterministic text-only classification for the "auto" alias; rewrites
+  # data["model"] before routing. See router/custom_router.py and policy.py.
+  callbacks: ["router.custom_router.router_logger"]
+
+router_settings:
+  routing_strategy: simple-shuffle
+  # fallbacks: injected by scripts/configure.py from router/routing-policy.json
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: null
+  disable_spend_logs: true

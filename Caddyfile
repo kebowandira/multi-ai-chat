@@ -1,0 +1,17 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$CHAT_DOMAIN} {
+	encode zstd gzip
+
+	# LibreChat streams SSE responses; disable buffering so tokens arrive live.
+	reverse_proxy librechat:3080 {
+		flush_interval -1
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

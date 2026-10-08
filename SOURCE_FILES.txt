@@ -1,0 +1,19 @@
+# Allowlist for what this repo may contain. One path per line; comments
+# start with #. scripts/check_source.py reads this before every commit.
+docker-compose.yml
+librechat.yaml
+litellm_config.yaml
+.env.example
+.gitignore
+.gitattributes
+Caddyfile
+LICENSE
+README.md
+AGENTS.md
+SOURCE_FILES.txt
+requirements-dev.txt
+mongo-init/
+router/
+scripts/
+tests/
+docs/

@@ -1,0 +1,31 @@
+{
+  "_comment": "Order matters within each list and within classification_rules. Edited by hand; scripts/configure.py reads this to build LiteLLM's router_settings.fallbacks and prunes any model name whose provider key is absent.",
+
+  "limits": {
+    "max_input_chars": 48000,
+    "max_output_tokens": 4096
+  },
+
+  "routes": {
+    "coding": ["claude-code", "deepseek-fast", "openai-main"],
+    "research": ["gemini-flash", "openai-main"],
+    "cheap": ["qwen-turbo", "deepseek-fast", "openai-low-cost", "gemini-flash-lite"]
+  },
+
+  "default_route": "cheap",
+
+  "classification_rules": [
+    {
+      "route": "coding",
+      "pattern": "(?i)\\b(debug|refactor|function|class|stack trace|traceback|compile|regex|unit test|pull request|mql[45]|python|javascript|typescript|c\\+\\+|sql query|bug|exception|null pointer|segfault)\\b"
+    },
+    {
+      "route": "research",
+      "pattern": "(?i)\\b(compare|analysis|riset|penelitian|market research|literature review|summarize the arguments|pros and cons|cite|citation|pasar indonesia)\\b"
+    },
+    {
+      "route": "cheap",
+      "pattern": "(?i)\\b(rewrite|summarize|shorten|rephrase|proofread|translate|tidy up)\\b"
+    }
+  ]
+}

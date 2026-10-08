@@ -1,0 +1,168 @@
+name: multi-ai-chat
+
+networks:
+  edge:
+  backend:
+    internal: true
+
+volumes:
+  mongo_data:
+  meili_data:
+  pgvector_data:
+  librechat_uploads:
+  librechat_logs:
+  hf_cache:
+  caddy_data:
+  caddy_config:
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    networks: [edge, backend]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    env_file:
+      - path: ./.env
+        format: raw
+    depends_on:
+      librechat:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  librechat:
+    image: ghcr.io/danny-avila/librechat-dev:latest
+    restart: unless-stopped
+    networks: [backend]
+    env_file:
+      - path: ./.env
+        format: raw
+    environment:
+      HOST: 0.0.0.0
+      MONGO_URI: mongodb://librechat:${MONGO_APP_PASSWORD}@mongodb:27017/LibreChat?authSource=LibreChat
+      MEILI_HOST: http://meilisearch:7700
+      RAG_API_URL: http://rag_api:8000
+    volumes:
+      - ./runtime/librechat.yaml:/app/librechat.yaml:ro
+      - librechat_uploads:/app/uploads
+      - librechat_logs:/app/api/logs
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    networks: [backend]
+    command: ["--auth", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: LibreChat
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD}
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    restart: unless-stopped
+    networks: [backend]
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meili_data:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7700/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  vectordb:
+    image: ankane/pgvector:v0.5.1
+    restart: unless-stopped
+    networks: [backend]
+    environment:
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  rag_api:
+    image: ${RAG_IMAGE:-ghcr.io/danny-avila/librechat-rag-api-dev:latest}
+    restart: unless-stopped
+    networks: [backend]
+    env_file:
+      - path: ./.env
+        format: raw
+    environment:
+      DB_HOST: vectordb
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RAG_PORT: 8000
+      JWT_SECRET: ${JWT_SECRET}
+    volumes:
+      - hf_cache:/app/cache
+    depends_on:
+      vectordb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
+    profiles: ["router"]
+    networks: [backend]
+    env_file:
+      - path: ./.env
+        format: raw
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+    volumes:
+      - ./runtime/litellm_config.yaml:/app/config.yaml:ro
+      - ./router:/app/router:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health/liveliness"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s

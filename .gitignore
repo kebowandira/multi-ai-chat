@@ -1,0 +1,17 @@
+# Generated locally on the VPS — never commit.
+.env
+runtime/
+docker-compose.override.yml
+image-lock.json
+backups/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv-gateway/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
