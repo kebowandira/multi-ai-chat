@@ -1,7 +1,7 @@
 # Deployment Tooling Correctness & Validation Report
 
 - **Assignment Date**: 16 October 2026 (WIB)
-- **Base Commit SHA**: `7d8f2c45163ed8a8dcba50a831e678ae99eb9bbf`
+- **Base Commit SHA**: `7d8f2c44bf549e2e193a7b3b8bddd9d6c4e8ab09`
 - **Tested Implementation SHA**: `c3f0d83cdf51e0ac0d40ac2baa89a75c55659c29` (branch `jules/deploy-validation-2026-10-16`)
 - **Environment**: Python 3.12.13, Docker Compose 2.30.1
 
