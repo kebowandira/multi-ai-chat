@@ -10,6 +10,8 @@ from router.policy import (  # noqa: E402
     anchor_message,
     classify_text,
     enforce_input_limit,
+    enforce_output_limit,
+    enforce_text_only,
     resolve_candidates,
     resolve_route,
     strip_anchor_prefix,
@@ -121,6 +123,41 @@ class LimitsTests(unittest.TestCase):
         huge = "x" * (self.policy.max_input_chars + 1)
         with self.assertRaises(RoutingError):
             enforce_input_limit([{"role": "user", "content": huge}], self.policy)
+
+    def test_under_output_limit_ok(self):
+        enforce_output_limit({"max_tokens": 100}, self.policy)
+
+    def test_over_output_limit_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_output_limit({"max_tokens": self.policy.max_output_tokens + 1}, self.policy)
+
+    def test_max_completion_tokens_over_limit_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_output_limit({"max_completion_tokens": self.policy.max_output_tokens + 1}, self.policy)
+
+
+class TextOnlyGuardTests(unittest.TestCase):
+    def test_plain_text_ok(self):
+        enforce_text_only({"messages": [{"role": "user", "content": "hello"}]})
+
+    def test_structured_content_text_ok(self):
+        enforce_text_only({"messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]})
+
+    def test_image_content_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_text_only({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": "http://example.com/img.png"}]}]})
+
+    def test_tools_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_text_only({"tools": [{"type": "function", "function": {"name": "test"}}]})
+
+    def test_response_format_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_text_only({"response_format": {"type": "json_object"}})
+
+    def test_tool_history_role_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_text_only({"messages": [{"role": "tool", "content": "res"}]})
 
 
 class ResolveCandidatesTests(unittest.TestCase):

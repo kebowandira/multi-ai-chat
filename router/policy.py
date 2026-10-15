@@ -122,6 +122,45 @@ def enforce_input_limit(messages: list[dict], policy: Policy) -> None:
         )
 
 
+def enforce_output_limit(data: dict, policy: Policy) -> None:
+    max_tokens = data.get("max_tokens")
+    if max_tokens is None:
+        max_tokens = data.get("max_completion_tokens")
+    if max_tokens is not None and isinstance(max_tokens, int) and max_tokens > policy.max_output_tokens:
+        raise RoutingError(
+            f"requested max output tokens ({max_tokens}) exceeds the {policy.max_output_tokens}-token router limit; "
+            "use a direct provider endpoint for larger generation limits"
+        )
+
+
+def enforce_text_only(data: dict) -> None:
+    if data.get("tools") or data.get("tool_choice") or data.get("functions") or data.get("function_call"):
+        raise RoutingError(
+            "route aliases support plain text only; tool/function calling is not permitted on router aliases, use a direct endpoint"
+        )
+    if data.get("response_format"):
+        raise RoutingError(
+            "route aliases support plain text only; structured outputs (response_format) are not permitted on router aliases, use a direct endpoint"
+        )
+    messages = data.get("messages", [])
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") in ("tool", "function") or m.get("tool_calls") or m.get("function_call") or m.get("tool_call_id"):
+            raise RoutingError(
+                "route aliases support plain text only; tool history is not permitted on router aliases, use a direct endpoint"
+            )
+        content = m.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                    if item_type and item_type != "text":
+                        raise RoutingError(
+                            f"route aliases support plain text only; content type '{item_type}' is not permitted on router aliases, use a direct endpoint"
+                        )
+
+
 def resolve_candidates(route: str, policy: Policy, available: set[str]) -> list[str]:
     """Ordered candidate model names for ``route``, filtered to configured providers."""
     candidates = policy.routes.get(route, [])
