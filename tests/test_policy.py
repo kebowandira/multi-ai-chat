@@ -125,7 +125,13 @@ class LimitsTests(unittest.TestCase):
             enforce_input_limit([{"role": "user", "content": huge}], self.policy)
 
     def test_under_output_limit_ok(self):
-        enforce_output_limit({"max_tokens": 100}, self.policy)
+        data = {"max_tokens": 100}
+        enforce_output_limit(data, self.policy)
+
+    def test_omitted_output_limit_defaults_to_policy_cap(self):
+        data = {}
+        enforce_output_limit(data, self.policy)
+        self.assertEqual(data.get("max_tokens"), self.policy.max_output_tokens)
 
     def test_over_output_limit_raises(self):
         with self.assertRaises(RoutingError):
@@ -134,6 +140,14 @@ class LimitsTests(unittest.TestCase):
     def test_max_completion_tokens_over_limit_raises(self):
         with self.assertRaises(RoutingError):
             enforce_output_limit({"max_completion_tokens": self.policy.max_output_tokens + 1}, self.policy)
+
+    def test_dual_field_max_completion_tokens_over_limit_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_output_limit({"max_tokens": 1, "max_completion_tokens": 5000}, self.policy)
+
+    def test_invalid_type_max_tokens_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_output_limit({"max_tokens": "invalid"}, self.policy)
 
 
 class TextOnlyGuardTests(unittest.TestCase):

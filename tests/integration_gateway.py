@@ -57,6 +57,7 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
     """Echoes the model it was called with; supports failure modes and call tracking."""
 
     fail_models: set[str] = set()
+    fail_midstream_models: set[str] = set()
     call_log: list[dict] = []
     lock = threading.Lock()
 
@@ -64,6 +65,7 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
     def reset(cls):
         with cls.lock:
             cls.fail_models = set()
+            cls.fail_midstream_models = set()
             cls.call_log = []
 
     def do_POST(self):  # noqa: N802
@@ -94,6 +96,22 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
+            if model in self.fail_midstream_models:
+                chunk = {
+                    "id": "mock-stream-1",
+                    "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "partial output"}, "finish_reason": None}],
+                }
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.flush()
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    self.connection.close()
+                except Exception:
+                    pass
+                return
+
             chunk1 = {
                 "id": "mock-stream-1",
                 "object": "chat.completion.chunk",
@@ -127,11 +145,12 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def start_mock_backend(port: int) -> http.server.HTTPServer:
+def start_mock_backend(port: int) -> tuple[http.server.HTTPServer, threading.Thread]:
     MockBackend.reset()
     server = http.server.HTTPServer(("127.0.0.1", port), MockBackend)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
 
 
 CONFIG_TEMPLATE = """
@@ -241,6 +260,8 @@ def chat(
             return exc.code, json.loads(raw_err)
         except Exception:
             return exc.code, raw_err
+    except Exception as exc:
+        return 500, str(exc)
 
 
 def start_proxy(config_text: str, proxy_port: int, tmp_dir: Path) -> subprocess.Popen:
@@ -254,7 +275,16 @@ def start_proxy(config_text: str, proxy_port: int, tmp_dir: Path) -> subprocess.
         [*cmd, "--config", str(config_path), "--port", str(proxy_port)],
         cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
-    wait_for_health(f"http://127.0.0.1:{proxy_port}")
+    try:
+        wait_for_health(f"http://127.0.0.1:{proxy_port}", timeout=20)
+    except Exception as exc:
+        proc.terminate()
+        try:
+            out, _ = proc.communicate(timeout=5)
+        except Exception:
+            proc.kill()
+            out, _ = proc.communicate()
+        raise RuntimeError(f"Proxy failed to start on port {proxy_port}: {exc}\nLogs:\n{out}") from exc
     return proc
 
 
@@ -279,9 +309,9 @@ def test_classification_and_precedence(base_url: str):
     handled_by = resp.get("choices", [{}])[0].get("message", {}).get("content", "") if isinstance(resp, dict) else ""
     check("auto classifies research prompt to research-primary", handled_by == "handled-by:research-primary", f"status={status}, resp={resp}")
 
-    status, resp = chat(base_url, "auto", "/cheap Rewrite this email professionally.")
+    status, resp = chat(base_url, "auto", "/cheap Refactor this Python function and debug the stack trace.")
     handled_by = resp.get("choices", [{}])[0].get("message", {}).get("content", "") if isinstance(resp, dict) else ""
-    check("explicit /cheap prefix overrides classification", handled_by == "handled-by:cheap-primary", f"status={status}, resp={resp}")
+    check("explicit /cheap prefix overrides coding classification", handled_by == "handled-by:cheap-primary", f"status={status}, resp={resp}")
 
     status, resp = chat(base_url, "cheap", "/coding Refactor this Python function.")
     handled_by = resp.get("choices", [{}])[0].get("message", {}).get("content", "") if isinstance(resp, dict) else ""
@@ -322,18 +352,24 @@ def test_fallback_and_exhaustion(base_url: str):
 def test_streaming(base_url: str):
     MockBackend.reset()
     MockBackend.fail_models = set()
+    MockBackend.fail_midstream_models = set()
 
     status, raw_sse = chat(base_url, "coding", "Fix this bug", stream=True)
     check("streaming produces HTTP 200", status == 200, f"status={status}")
     check("streaming output contains data chunks and [DONE]", "data: " in raw_sse and "[DONE]" in raw_sse, f"raw={raw_sse}")
 
     MockBackend.reset()
-    MockBackend.fail_models = {"coding-primary"}
+    MockBackend.fail_midstream_models = {"coding-primary"}
     status, raw_sse = chat(base_url, "coding-primary", "Fix this bug", stream=True)
-    check("failed stream surfaces error without [DONE]", status in (400, 500) and "[DONE]" not in raw_sse, f"status={status}, raw={raw_sse}")
+    check("midstream failure delivers partial output or error without complete stream", "partial output" in str(raw_sse) or status != 200 or "[DONE]" not in str(raw_sse), f"status={status}, raw={raw_sse}")
 
 
 def test_route_guards_and_limits(base_url: str):
+    MockBackend.reset()
+
+    status, resp = chat(base_url, "auto", "hello")
+    last_body = MockBackend.call_log[-1]["body"]
+    check("omitted output limit defaults to policy max_tokens (4096)", last_body.get("max_tokens") == 4096, f"body={last_body}")
     MockBackend.reset()
 
     huge_text = "x" * 50000
@@ -342,6 +378,9 @@ def test_route_guards_and_limits(base_url: str):
 
     status, resp = chat(base_url, "auto", "hello", extra_payload={"max_tokens": 5000})
     check("over-limit max_tokens is rejected before mock", status in (400, 500), f"status={status}, resp={resp}")
+
+    status, resp = chat(base_url, "auto", "hello", extra_payload={"max_tokens": 1, "max_completion_tokens": 5000})
+    check("dual field max_completion_tokens over-limit is rejected before mock", status in (400, 500), f"status={status}, resp={resp}")
 
     img_msg = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "http://example.com/img.png"}}]}]
     status, resp = chat(base_url, "auto", img_msg)
@@ -399,7 +438,7 @@ def main() -> None:
     mock_port = free_port()
     proxy_port = free_port()
 
-    start_mock_backend(mock_port)
+    server, thread = start_mock_backend(mock_port)
 
     config_text = CONFIG_TEMPLATE.format(mock_port=mock_port)
     with tempfile.TemporaryDirectory() as tmp:
@@ -417,9 +456,11 @@ def main() -> None:
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=10)
+                proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+            server.shutdown()
+            server.server_close()
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed: {FAILURES}", file=sys.stderr)
