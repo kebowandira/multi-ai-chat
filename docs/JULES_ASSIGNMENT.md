@@ -3,6 +3,39 @@
 Assignment date: 15 October 2026. Status: ready for owner submission; no Jules
 session has been launched by publishing this file.
 
+## Execution authority — answers to clarification questions
+
+The owner has authorized this bounded assignment. Proceed with planning,
+implementation, local testing, branch publication and PR submission without
+asking the owner to reconfirm decisions already specified here.
+
+1. Branch: jules/router-validation-2026-10-15 targeting main is approved.
+   If Jules requires an automatically generated branch name, use it and report
+   the actual name. If a branch already contains this task, inspect and continue
+   it safely; do not reset, overwrite or force-push existing work.
+2. Scope: the Allowed changes section below is confirmed. Leave Compose,
+   image locks/versions and deployment/backup/pinning scripts unchanged.
+   Report out-of-scope findings and continue independent in-scope work.
+3. Tests: isolated virtual environments, synthetic prompts, dummy credentials,
+   and loopback mock backends are confirmed. Installing the stated dependencies
+   and starting a local mock server/LiteLLM process are authorized. No live or
+   billable provider calls are authorized.
+4. Deployment/merge: no production containers, host changes, force-push or
+   auto-merge. Local test processes are expected and must be cleaned up.
+5. Output: PR URL, branch, tested implementation SHA, exact baseline/final test
+   results, scenario coverage, findings and remaining blockers. Add the report
+   at the path specified below. No additional output requirements are pending.
+
+Choose routine implementation details independently within scope. Do not pause
+for branch naming preferences, confirmation of the file list, test environment,
+deliverable format or ordinary reversible code/test choices. If access or a
+dependency blocks one check, record the exact failure and complete everything
+else that remains possible. Ask only when a genuinely missing decision prevents
+safe in-scope progress, a required action exceeds scope, or instructions conflict.
+Never bypass Jules platform permissions or required approval controls. If the
+platform itself requires plan approval, present one concrete plan with these
+decisions already applied; do not replace it with repeated clarification questions.
+
 ## Objective and ownership
 
 Validate the actual router/configuration path in this public reusable stack.
