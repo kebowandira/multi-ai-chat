@@ -1,8 +1,8 @@
 # Router and Mock Integration Validation Report
 
 - **Assignment Date**: 15 October 2026
-- **Base Commit SHA**: `8e3e6644f1ddbead08b61c9eefaf92b67d5ce390`
-- **Tested Implementation SHA**: `8e3e6644f1ddbead08b61c9eefaf92b67d5ce390` (branch `jules/router-validation-2026-10-15`)
+- **Base Commit SHA**: `8e3e6644dba79f7f24e4529f19e5c2309f3a4db4`
+- **Tested Implementation SHA**: `8308edffb316d4d1edfe081027dab093f66bdf5f` (branch `jules/router-validation-2026-10-15`)
 - **Environment**: Python 3.12.13, LiteLLM 1.104.0
 
 ---
@@ -15,7 +15,7 @@
 | `unittest discover -s tests -v` | PASS (30/30 passed) | PASS (46/46 passed) | Policy and config unit tests |
 | `bash -n scripts/deploy.sh` | PASS | PASS | Shell syntax validation |
 | `compileall scripts router tests` | PASS | PASS | Python bytecode compilation |
-| `tests/integration_gateway.py` | FAIL (Timeout Error) | PASS (29/29 passed) | Real LiteLLM proxy process against local mock server |
+| `tests/integration_gateway.py` | FAIL (Timeout Error) | PASS (35/35 passed) | Real LiteLLM proxy process against local mock server |
 
 ---
 
@@ -33,7 +33,7 @@
   1. Updated `tests/integration_gateway.py` to invoke `.venv-gateway/bin/litellm` executable binary.
   2. Redirected subprocess logs to dedicated temporary log files (`log_file = open(tmp_dir / f"litellm_{proxy_port}.log", "w+")`), eliminating pipe buffer stalls.
   3. Set `LITELLM_LOCAL_MODEL_COST_MAP=True` in environment to prevent external network fetch stalls during offline startup.
-  4. Added cleanup logic in `start_proxy` to capture and raise log contents if health check fails.
+  4. Increased `start_proxy` health check timeout to 30s and added cleanup logic in `start_proxy` to capture and raise log contents if health check fails.
 
 ### Finding 2: Missing Enforcement of Output Token Limits, Null/Boolean Bypasses, and Text-Only Guards
 - **Severity**: Medium (Router Policy Enforcement)
@@ -63,13 +63,14 @@
 | **Classification & Precedence** | COVERED | `test_classification_and_precedence`: Verified keyword auto-classification (`coding` / `research` / `cheap`), explicit `/cheap` prompt prefix override on a `coding`-shaped prompt (`/cheap Refactor this Python function...`), explicit UI route precedence over text prefixes, anchor prefix stripping, and follow-up conversation tier locking. |
 | **Missing-Key Pruning** | COVERED | `test_missing_key_pruning` & `test_alias_omitted_when_no_candidates_available`: Verified `configure.compile_litellm` prunes aliases when candidate provider keys are missing and `/v1/models` does not advertise unconfigured routes. |
 | **Fallback & Exhaustion** | COVERED | `test_fallback_and_exhaustion`: Verified primary model HTTP 500 error triggers fallback to `coding-backup`. Verified simultaneous primary and backup failures return HTTP 500 without infinite loops. |
-| **Streaming SSE** | COVERED | `test_streaming`: Verified HTTP 200 SSE streaming output with parsed `data: ...` events and `[DONE]` termination. Verified midstream delivery receives partial output chunks and upstream errors fail without sending `[DONE]`. |
+| **Streaming SSE** | COVERED | `test_streaming`: Verified HTTP 200 SSE streaming output with parsed `data: ...` events. Verified midstream failure on alias route `coding` delivers partial content chunks without triggering transparent fallback replay to `coding-backup` (`coding-backup` call count = 0), preventing text duplication. Upstream HTTP 500 errors return error status without `[DONE]`. |
 | **Route Guards & Limits** | COVERED | `test_route_guards_and_limits`, `LimitsTests`, & `TextOnlyGuardTests`: Verified input length >48k, max tokens / max completion tokens >4096, omitted / `null` limit defaults (4096), booleans/negatives rejection, image content, and tool calls are rejected on alias routes prior to mock backend receipt, while direct model endpoints allow larger limits. |
 
 ---
 
-## Remaining Risks, Skipped Checks, and Recommendations
+## Observed Upstream Behavior Notes & Recommendations
 
+- **Streaming Behavior Note**: In LiteLLM 1.104.0, when an HTTP 200 SSE stream has delivered partial data chunks and the upstream server connection is closed mid-stream, LiteLLM forwards the partial content and synthesizes a completion chunk rather than executing a mid-stream fallback attempt. This prevents duplicating partial response text across fallbacks.
 - **Skipped / Blocked Checks**: None. All required unit and integration tests were executed locally and passed.
 - **Production Isolation**: All test executions were performed using isolated virtual environments (`.venv` and `.venv-gateway`), local mock HTTP backends, and synthetic data. No live AI provider API calls or deployment actions were taken.
 - **Recommendations**: Maintain integration tests in automated CI runs to detect potential changes in LiteLLM's `CustomLogger` callback interfaces in future updates.

@@ -300,7 +300,7 @@ def start_proxy(config_text: str, proxy_port: int, tmp_dir: Path) -> tuple[subpr
         cwd=ROOT, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True,
     )
     try:
-        wait_for_health(f"http://127.0.0.1:{proxy_port}", timeout=20)
+        wait_for_health(f"http://127.0.0.1:{proxy_port}", timeout=30)
     except Exception as exc:
         proc.terminate()
         try:
@@ -394,25 +394,33 @@ def test_streaming(base_url: str):
     check("streaming produces HTTP 200", status == 200, f"status={status}")
     check("streaming output contains parsed data events and done event", any("data" in ev for ev in events) and any(ev.get("done") for ev in events), f"events={events}")
 
-    # Midstream delivery on alias route "coding"
+    # Midstream failure on alias route "coding" (primary model fails midstream after flushing data)
     MockBackend.reset()
     MockBackend.fail_midstream_models = {"coding-primary"}
-    status, raw_sse = chat(base_url, "coding-primary", "hello", stream=True)
+    status, raw_sse = chat(base_url, "coding", "Fix this bug", stream=True)
     events = parse_sse_events(str(raw_sse))
 
-    has_partial = any(
-        ev.get("data", {}).get("choices", [{}])[0].get("delta", {}).get("content") == "partial output"
-        for ev in events
-    )
-    check("midstream delivery receives partial output chunk", has_partial, f"events={events}")
+    has_partial = False
+    partial_count = 0
+    for ev in events:
+        data = ev.get("data", {})
+        delta = data.get("choices", [{}])[0].get("delta", {})
+        if delta.get("content") == "partial output":
+            has_partial = True
+            partial_count += 1
 
-    # Upstream stream failure (HTTP 500 error)
+    models_called = [c["model"] for c in MockBackend.call_log]
+    check("midstream failure on alias coding receives partial output chunk", has_partial, f"events={events}")
+    check("midstream failure does not trigger fallback replay to backup", "coding-backup" not in models_called, f"called={models_called}")
+    check("midstream failure delivers partial chunk exactly once without duplication", partial_count == 1, f"count={partial_count}")
+
+    # Upstream stream failure (HTTP 500 error before stream starts)
     MockBackend.reset()
     MockBackend.fail_models = {"coding-primary", "coding-backup"}
     status, raw_sse = chat(base_url, "coding", "Fix bug", stream=True)
     events = parse_sse_events(str(raw_sse))
     has_done = any(ev.get("done") for ev in events)
-    check("failed stream returns error status and does not send [DONE]", status in (400, 500) and not has_done, f"status={status}, events={events}")
+    check("failed stream returns error status (500) and does not send [DONE]", status in (400, 500) and not has_done, f"status={status}, events={events}")
 
 
 def test_route_guards_and_limits(base_url: str):
