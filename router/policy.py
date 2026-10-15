@@ -123,14 +123,20 @@ def enforce_input_limit(messages: list[dict], policy: Policy) -> None:
 
 
 def enforce_output_limit(data: dict, policy: Policy) -> None:
+    # Treat explicit None / null as absent
     for field in ("max_tokens", "max_completion_tokens"):
-        val = data.get(field)
-        if val is not None:
-            if not isinstance(val, int) or val > policy.max_output_tokens or val < 1:
+        if field in data and data[field] is None:
+            del data[field]
+
+    for field in ("max_tokens", "max_completion_tokens"):
+        if field in data:
+            val = data[field]
+            if isinstance(val, bool) or not isinstance(val, int) or val > policy.max_output_tokens or val < 1:
                 raise RoutingError(
                     f"requested {field} ({val}) is invalid or exceeds the {policy.max_output_tokens}-token router limit; "
                     "use a direct provider endpoint for larger generation limits"
                 )
+
     if "max_tokens" not in data and "max_completion_tokens" not in data:
         data["max_tokens"] = policy.max_output_tokens
 

@@ -149,6 +149,23 @@ class LimitsTests(unittest.TestCase):
         with self.assertRaises(RoutingError):
             enforce_output_limit({"max_tokens": "invalid"}, self.policy)
 
+    def test_null_max_tokens_defaults_to_policy_cap(self):
+        data = {"max_tokens": None}
+        enforce_output_limit(data, self.policy)
+        self.assertEqual(data.get("max_tokens"), self.policy.max_output_tokens)
+
+    def test_boolean_max_tokens_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_output_limit({"max_tokens": True}, self.policy)
+        with self.assertRaises(RoutingError):
+            enforce_output_limit({"max_tokens": False}, self.policy)
+
+    def test_zero_or_negative_max_tokens_raises(self):
+        with self.assertRaises(RoutingError):
+            enforce_output_limit({"max_tokens": 0}, self.policy)
+        with self.assertRaises(RoutingError):
+            enforce_output_limit({"max_tokens": -10}, self.policy)
+
 
 class TextOnlyGuardTests(unittest.TestCase):
     def test_plain_text_ok(self):

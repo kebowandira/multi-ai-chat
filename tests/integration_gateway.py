@@ -11,8 +11,8 @@ Verifies against a real litellm binary:
   - Auto classification, explicit UI route precedence, prefix precedence/removal, and follow-up behavior
   - Missing-key pruning does not advertise unusable route aliases
   - Primary model fallback and fallback exhaustion behavior without infinite loops
-  - Streaming SSE framing and completion termination; mid-stream failure surfacing
-  - Text-only route guards, input limits, and output limits enforced before reaching mock
+  - Streaming SSE framing, SSE event parsing, and completion termination; mid-stream failure surfacing
+  - Text-only route guards, input limits, and output limits (including null/boolean checks) enforced before reaching mock
 """
 from __future__ import annotations
 
@@ -221,6 +221,24 @@ def wait_for_health(base_url: str, timeout: float = 30) -> None:
     raise TimeoutError(f"litellm proxy at {base_url} never became healthy")
 
 
+def parse_sse_events(raw_sse: str) -> list[dict]:
+    events = []
+    for line in raw_sse.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("data:"):
+            continue
+        data_str = line[5:].strip()
+        if data_str == "[DONE]":
+            events.append({"done": True})
+            continue
+        try:
+            parsed = json.loads(data_str)
+            events.append({"data": parsed})
+        except Exception:
+            events.append({"raw": data_str})
+    return events
+
+
 def chat(
     base_url: str,
     model: str,
@@ -264,28 +282,45 @@ def chat(
         return 500, str(exc)
 
 
-def start_proxy(config_text: str, proxy_port: int, tmp_dir: Path) -> subprocess.Popen:
+def start_proxy(config_text: str, proxy_port: int, tmp_dir: Path) -> tuple[subprocess.Popen, Path]:
     config_path = tmp_dir / f"config_{proxy_port}.yaml"
     config_path.write_text(config_text, encoding="utf-8")
+    log_path = tmp_dir / f"litellm_{proxy_port}.log"
+    log_file = open(log_path, "w+", encoding="utf-8")
 
-    env = {**os.environ, "PYTHONPATH": f"{ROOT}{os.pathsep}{os.environ.get('PYTHONPATH', '')}"}
+    env = {
+        **os.environ,
+        "PYTHONPATH": f"{ROOT}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
+        "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+    }
     litellm_bin = Path(sys.executable).parent / "litellm"
     cmd = [str(litellm_bin)] if litellm_bin.exists() else [sys.executable, "-m", "litellm.proxy.proxy_cli"]
     proc = subprocess.Popen(
         [*cmd, "--config", str(config_path), "--port", str(proxy_port)],
-        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        cwd=ROOT, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True,
     )
     try:
         wait_for_health(f"http://127.0.0.1:{proxy_port}", timeout=20)
     except Exception as exc:
         proc.terminate()
         try:
-            out, _ = proc.communicate(timeout=5)
-        except Exception:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
             proc.kill()
-            out, _ = proc.communicate()
-        raise RuntimeError(f"Proxy failed to start on port {proxy_port}: {exc}\nLogs:\n{out}") from exc
-    return proc
+            proc.wait()
+        log_file.flush()
+        logs = log_path.read_text(encoding="utf-8", errors="ignore")
+        raise RuntimeError(f"Proxy failed to start on port {proxy_port}: {exc}\nCaptured proxy logs:\n{logs}") from exc
+    return proc, log_path
+
+
+def stop_proxy(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 def test_gateway_auth(base_url: str):
@@ -355,13 +390,29 @@ def test_streaming(base_url: str):
     MockBackend.fail_midstream_models = set()
 
     status, raw_sse = chat(base_url, "coding", "Fix this bug", stream=True)
+    events = parse_sse_events(str(raw_sse))
     check("streaming produces HTTP 200", status == 200, f"status={status}")
-    check("streaming output contains data chunks and [DONE]", "data: " in raw_sse and "[DONE]" in raw_sse, f"raw={raw_sse}")
+    check("streaming output contains parsed data events and done event", any("data" in ev for ev in events) and any(ev.get("done") for ev in events), f"events={events}")
 
+    # Midstream delivery on alias route "coding"
     MockBackend.reset()
     MockBackend.fail_midstream_models = {"coding-primary"}
-    status, raw_sse = chat(base_url, "coding-primary", "Fix this bug", stream=True)
-    check("midstream failure delivers partial output or error without complete stream", "partial output" in str(raw_sse) or status != 200 or "[DONE]" not in str(raw_sse), f"status={status}, raw={raw_sse}")
+    status, raw_sse = chat(base_url, "coding-primary", "hello", stream=True)
+    events = parse_sse_events(str(raw_sse))
+
+    has_partial = any(
+        ev.get("data", {}).get("choices", [{}])[0].get("delta", {}).get("content") == "partial output"
+        for ev in events
+    )
+    check("midstream delivery receives partial output chunk", has_partial, f"events={events}")
+
+    # Upstream stream failure (HTTP 500 error)
+    MockBackend.reset()
+    MockBackend.fail_models = {"coding-primary", "coding-backup"}
+    status, raw_sse = chat(base_url, "coding", "Fix bug", stream=True)
+    events = parse_sse_events(str(raw_sse))
+    has_done = any(ev.get("done") for ev in events)
+    check("failed stream returns error status and does not send [DONE]", status in (400, 500) and not has_done, f"status={status}, events={events}")
 
 
 def test_route_guards_and_limits(base_url: str):
@@ -372,10 +423,26 @@ def test_route_guards_and_limits(base_url: str):
     check("omitted output limit defaults to policy max_tokens (4096)", last_body.get("max_tokens") == 4096, f"body={last_body}")
     MockBackend.reset()
 
+    # Null output limit (max_tokens=None) defaults to 4096
+    status, resp = chat(base_url, "auto", "hello", extra_payload={"max_tokens": None})
+    last_body = MockBackend.call_log[-1]["body"]
+    check("null output limit defaults to policy max_tokens (4096)", last_body.get("max_tokens") == 4096, f"body={last_body}")
+    MockBackend.reset()
+
+    # Boolean max_tokens rejected before mock
+    status, resp = chat(base_url, "auto", "hello", extra_payload={"max_tokens": True})
+    check("boolean max_tokens is rejected before mock", status in (400, 500), f"status={status}, resp={resp}")
+
+    # Negative max_tokens rejected before mock
+    status, resp = chat(base_url, "auto", "hello", extra_payload={"max_tokens": -10})
+    check("negative max_tokens is rejected before mock", status in (400, 500), f"status={status}, resp={resp}")
+
+    # Input limit (> 48,000 chars)
     huge_text = "x" * 50000
     status, resp = chat(base_url, "auto", huge_text)
     check("over-limit input is rejected before mock", status in (400, 500), f"status={status}, resp={resp}")
 
+    # Max output limit (> 4096)
     status, resp = chat(base_url, "auto", "hello", extra_payload={"max_tokens": 5000})
     check("over-limit max_tokens is rejected before mock", status in (400, 500), f"status={status}, resp={resp}")
 
@@ -417,7 +484,7 @@ def test_missing_key_pruning(tmp_dir: Path, mock_port: int):
             entry["litellm_params"]["api_key"] = "sk-mock"
 
     config_text = yaml.safe_dump(litellm_doc)
-    proc = start_proxy(config_text, pruned_port, tmp_dir)
+    proc, _ = start_proxy(config_text, pruned_port, tmp_dir)
     try:
         base_url = f"http://127.0.0.1:{pruned_port}"
         req = urllib.request.Request(f"{base_url}/v1/models", headers={"Authorization": "Bearer sk-test-master"})
@@ -427,11 +494,7 @@ def test_missing_key_pruning(tmp_dir: Path, mock_port: int):
             check("pruned catalog does not advertise unavailable research alias", "research" not in model_ids, f"catalog={model_ids}")
             check("pruned catalog advertises available coding alias", "coding" in model_ids, f"catalog={model_ids}")
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        stop_proxy(proc)
 
 
 def main() -> None:
@@ -443,9 +506,10 @@ def main() -> None:
     config_text = CONFIG_TEMPLATE.format(mock_port=mock_port)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        proc = start_proxy(config_text, proxy_port, tmp_dir)
-        base_url = f"http://127.0.0.1:{proxy_port}"
+        proc = None
         try:
+            proc, _ = start_proxy(config_text, proxy_port, tmp_dir)
+            base_url = f"http://127.0.0.1:{proxy_port}"
             test_gateway_auth(base_url)
             test_classification_and_precedence(base_url)
             test_fallback_and_exhaustion(base_url)
@@ -454,13 +518,11 @@ def main() -> None:
             test_missing_key_pruning(tmp_dir, mock_port)
 
         finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            if proc is not None:
+                stop_proxy(proc)
             server.shutdown()
             server.server_close()
+            thread.join(timeout=5)
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed: {FAILURES}", file=sys.stderr)
