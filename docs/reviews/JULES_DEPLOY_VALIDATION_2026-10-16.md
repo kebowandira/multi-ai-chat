@@ -2,7 +2,7 @@
 
 - **Assignment Date**: 16 October 2026 (WIB)
 - **Base Commit SHA**: `7d8f2c44bf549e2e193a7b3b8bddd9d6c4e8ab09`
-- **Tested Implementation SHA**: `jules/deploy-validation-c1-2026-10-16` (separate C1 deployment branch)
+- **Tested Implementation SHA**: `cb5d5cf4d68ccfd1d65b01fdf1f361cebed6d587` (branch `jules/deploy-c1-20261016`)
 - **Environment**: Python 3.12.13, Docker Compose 2.30.1
 
 ### Changed File SHA256 Manifest
@@ -20,10 +20,91 @@
 | Check | Baseline Result | Final Result | Notes |
 |---|---|---|---|
 | `scripts/check_source.py` | PASS (34 files) | PASS (48 files) | Allowlist source publication guard |
-| `unittest discover -s tests -v` | PASS (30/30 passed) | PASS (51/51 passed) | Unit & deployment test suites |
+| `unittest discover -s tests -v` | PASS (30/30 passed) | PASS (52/52 passed) | Unit & deployment test suites |
 | `bash -n scripts/deploy.sh` | PASS | PASS | Shell syntax validation |
 | `compileall scripts router tests` | PASS | PASS | Python bytecode compilation |
 | `git diff --check` | PASS | PASS | Whitespace & diff safety |
+
+---
+
+## Verbatim Execution Outputs
+
+### 1. Source Publication Allowlist Guard
+```
+$ .venv/bin/python scripts/check_source.py
+ok: 48 allowlisted files, no forbidden paths, no credential patterns matched
+```
+
+### 2. Unit & Deployment Test Discovery Output
+```
+$ .venv/bin/python -m unittest discover -s tests -v
+test_api_keys_substituted (test_config.CompileLibrechatTests.test_api_keys_substituted) ... ok
+test_no_providers_leaves_only_smartrouter_when_router_enabled (test_config.CompileLibrechatTests.test_no_providers_leaves_only_smartrouter_when_router_enabled) ... ok
+test_only_deepseek_kept (test_config.CompileLibrechatTests.test_only_deepseek_kept) ... ok
+test_smartrouter_requires_router_enabled (test_config.CompileLibrechatTests.test_smartrouter_requires_router_enabled) ... ok
+test_coding_alias_and_fallback_built (test_config.CompileLitellmTests.test_coding_alias_and_fallback_built) ... ok
+test_no_providers_yields_no_aliases (test_config.CompileLitellmTests.test_no_providers_yields_no_aliases) ... ok
+test_prunes_unavailable_models (test_config.CompileLitellmTests.test_prunes_unavailable_models) ... ok
+test_single_candidate_route_has_no_fallback_entry (test_config.CompileLitellmTests.test_single_candidate_route_has_no_fallback_entry) ... ok
+test_missing_var_becomes_empty_string (test_config.SubstituteTests.test_missing_var_becomes_empty_string) ... ok
+test_substitutes_nested_structures (test_config.SubstituteTests.test_substitutes_nested_structures) ... ok
+test_bad_compose_config_fails (test_deploy.DeployScriptTests.test_bad_compose_config_fails) ... ok
+test_empty_expected_services_fails (test_deploy.DeployScriptTests.test_empty_expected_services_fails) ... ok
+test_missing_env_fails (test_deploy.DeployScriptTests.test_missing_env_fails) ... ok
+test_missing_service_causes_deploy_failure (test_deploy.DeployScriptTests.test_missing_service_causes_deploy_failure) ... ok
+test_profile_combination_standalone_and_router (test_deploy.DeployScriptTests.test_profile_combination_standalone_and_router) ... ok
+test_pull_failure_causes_deploy_failure (test_deploy.DeployScriptTests.test_pull_failure_causes_deploy_failure) ... ok
+test_standalone_profile_disabled_skips_caddy_validation (test_deploy.DeployScriptTests.test_standalone_profile_disabled_skips_caddy_validation) ... ok
+test_successful_deployment (test_deploy.DeployScriptTests.test_successful_deployment) ... ok
+test_unhealthy_service_causes_deploy_failure (test_deploy.DeployScriptTests.test_unhealthy_service_causes_deploy_failure) ... ok
+test_atomic_file_preservation_on_failure (test_pin_images.PinImagesTests.test_atomic_file_preservation_on_failure) ... ok
+test_load_compose_services_config_failure_dies (test_pin_images.PinImagesTests.test_load_compose_services_config_failure_dies) ... error: docker compose config failed:
+Compose config error
+ok
+test_match_repo_digest_registry_with_port (test_pin_images.PinImagesTests.test_match_repo_digest_registry_with_port) ... ok
+test_match_repo_digest_simple (test_pin_images.PinImagesTests.test_match_repo_digest_simple) ... ok
+test_match_repo_digest_unrelated_repo_fails (test_pin_images.PinImagesTests.test_match_repo_digest_unrelated_repo_fails) ... error: no matching RepoDigest found for trusted.example/team/app:v1 in ['other.example/evil@sha256:abc']
+ok
+test_anchor_is_first_user_message (test_policy.AnchorTests.test_anchor_is_first_user_message) ... ok
+test_no_user_message_returns_none (test_policy.AnchorTests.test_no_user_message_returns_none) ... ok
+test_cheap_default (test_policy.ClassifyTextTests.test_cheap_default) ... ok
+test_coding_keyword (test_policy.ClassifyTextTests.test_coding_keyword) ... ok
+test_coding_precedes_research_when_both_could_match (test_policy.ClassifyTextTests.test_coding_precedes_research_when_both_could_match) ... ok
+test_research_keyword_indonesian (test_policy.ClassifyTextTests.test_research_keyword_indonesian) ... ok
+test_unmatched_falls_back_to_default_route (test_policy.ClassifyTextTests.test_unmatched_falls_back_to_default_route) ... ok
+test_over_limit_raises (test_policy.LimitsTests.test_over_limit_raises) ... ok
+test_under_limit_ok (test_policy.LimitsTests.test_under_limit_ok) ... ok
+test_filters_to_available (test_policy.ResolveCandidatesTests.test_filters_to_available) ... ok
+test_preserves_policy_order (test_policy.ResolveCandidatesTests.test_preserves_policy_order) ... ok
+test_raises_when_nothing_available (test_policy.ResolveCandidatesTests.test_raises_when_nothing_available) ... ok
+test_classification_used_when_no_prefix (test_policy.ResolveRouteTests.test_classification_used_when_no_prefix) ... ok
+test_empty_conversation_returns_default (test_policy.ResolveRouteTests.test_empty_conversation_returns_default) ... ok
+test_follow_up_does_not_change_tier (test_policy.ResolveRouteTests.test_follow_up_does_not_change_tier) ... ok
+test_unknown_prefix_falls_back_to_classification (test_policy.ResolveRouteTests.test_unknown_prefix_falls_back_to_classification) ... ok
+test_removes_prefix_from_anchor_only (test_policy.StripAnchorPrefixTests.test_removes_prefix_from_anchor_only) ... ok
+test_empty_string (test_policy.StripPrefixTests.test_empty_string) ... ok
+test_no_prefix_returns_none (test_policy.StripPrefixTests.test_no_prefix_returns_none) ... ok
+test_strips_known_prefix (test_policy.StripPrefixTests.test_strips_known_prefix) ... ok
+test_check_compose_version_cmd_error_fails (test_preflight.PreflightTests.test_check_compose_version_cmd_error_fails) ... FAIL: docker compose command failed: plugin missing
+ok
+test_check_compose_version_too_old_fails (test_preflight.PreflightTests.test_check_compose_version_too_old_fails) ... FAIL: docker compose v2.29.0 is older than required 2.30.0 (env_file format: raw)
+ok
+test_check_compose_version_valid (test_preflight.PreflightTests.test_check_compose_version_valid) ... ok
+test_check_docker_daemon_unreachable_fails (test_preflight.PreflightTests.test_check_docker_daemon_unreachable_fails) ... FAIL: docker daemon is not running or unreachable: Is the docker daemon running?
+ok
+test_check_env_missing_secret_fails (test_preflight.PreflightTests.test_check_env_missing_secret_fails) ... FAIL: .env variable JWT_SECRET is missing or blank; run: python3 scripts/init-env.py
+ok
+test_check_env_router_missing_master_key_fails (test_preflight.PreflightTests.test_check_env_router_missing_master_key_fails) ... FAIL: .env variable LITELLM_MASTER_KEY is missing or blank; run: python3 scripts/init-env.py
+ok
+test_check_tool_missing_optional_warns (test_preflight.PreflightTests.test_check_tool_missing_optional_warns) ... ok
+test_check_tool_missing_required_raises (test_preflight.PreflightTests.test_check_tool_missing_required_raises) ... FAIL: 'docker' not found on PATH
+ok
+
+----------------------------------------------------------------------
+Ran 52 tests in 5.364s
+
+OK
+```
 
 ---
 
@@ -50,8 +131,11 @@
   1. Missing required tools (`docker`, `git`) or Compose errors printed warnings instead of hard failures.
   2. Compose versions < 2.30.0 or unparseable version strings did not trigger hard exits.
   3. Missing required env secrets for enabled profiles (e.g. `LITELLM_MASTER_KEY` when router enabled) were not validated.
+  4. Web port warnings (80/443) were printed even in shared-proxy mode where standalone Caddy is not bound.
 - **Fix Rationale**:
   - Enforced `fail(...)` hard exits on missing required tools, daemon connectivity failures (`docker info`), Compose plugin failures, Compose versions < 2.30.0, or blank required secrets.
+  - Restricted web port checks strictly to when `standalone` profile is active.
+  - Respected `COMPOSE_PROFILES` from environment variables as well as `.env`.
 
 ### Defect 3: Image Pinning Parsed Raw Variables, Allowed Unrelated Repo Digests, and Overwrote Lock Files
 - **Severity**: Medium (Image Pinning Reliability)

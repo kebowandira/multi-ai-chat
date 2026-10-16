@@ -3,6 +3,7 @@
 the first hard failure; prints warnings for soft issues and keeps going."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,12 @@ def check_docker_daemon() -> None:
     print("ok: docker daemon is reachable")
 
 
+def get_active_profiles(values: dict[str, str]) -> set[str]:
+    env_profiles = os.environ.get("COMPOSE_PROFILES")
+    profile_str = env_profiles if env_profiles is not None else values.get("COMPOSE_PROFILES", "")
+    return set(p.strip() for p in profile_str.split(",") if p.strip())
+
+
 def check_env() -> None:
     if not ENV_PATH.exists():
         fail(f"{ENV_PATH} missing; run: python3 scripts/init-env.py")
@@ -69,7 +76,7 @@ def check_env() -> None:
     if missing_keys:
         warn(f".env is missing keys present in .env.example: {', '.join(sorted(missing_keys))}")
 
-    profiles = set(p.strip() for p in (values.get("COMPOSE_PROFILES") or "").split(",") if p.strip())
+    profiles = get_active_profiles(values)
 
     if "standalone" in profiles:
         chat_domain = values.get("CHAT_DOMAIN", "chat.example.com")
@@ -97,7 +104,7 @@ def check_ports() -> None:
     if not ENV_PATH.exists():
         return
     values = read_env_file(ENV_PATH)
-    profiles = set(p.strip() for p in (values.get("COMPOSE_PROFILES") or "").split(",") if p.strip())
+    profiles = get_active_profiles(values)
 
     if "standalone" in profiles:
         for port in (80, 443):

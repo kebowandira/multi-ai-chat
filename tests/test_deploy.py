@@ -18,9 +18,12 @@ class DeployScriptTests(unittest.TestCase):
         self.bin_dir = self.tmp_path / "bin"
         self.bin_dir.mkdir()
 
-        # Copy scripts directory into project root
+        # Copy scripts and router directories into project root
         self.proj_scripts = self.tmp_path / "scripts"
         shutil.copytree(ROOT / "scripts", self.proj_scripts)
+
+        if (ROOT / "router").exists():
+            shutil.copytree(ROOT / "router", self.tmp_path / "router")
 
         # Create dummy source templates
         (self.tmp_path / "librechat.yaml").write_text("endpoints:\n  custom: []\n", encoding="utf-8")
@@ -67,7 +70,11 @@ fi
 if [ "$1" = "compose" ] && [ "$2" = "config" ] && [ "$3" = "--services" ]; then
   if [ "${{MOCK_EMPTY_SERVICES:-}}" = "1" ]; then
     echo ""
-  elif [ "${{MOCK_DISABLED_ROUTER:-}}" = "1" ]; then
+  elif [ "${{MOCK_PROFILE_MODE:-}}" = "standalone,router" ]; then
+    echo -e "caddy\\nlibrechat\\nlitellm\\nmongo"
+  elif [ "${{MOCK_PROFILE_MODE:-}}" = "router" ]; then
+    echo -e "librechat\\nlitellm\\nmongo"
+  elif [ "${{MOCK_PROFILE_MODE:-}}" = "none" ]; then
     echo -e "librechat\\nmongo"
   else
     echo -e "caddy\\nlibrechat\\nmongo"
@@ -84,9 +91,23 @@ if [ "$1" = "compose" ] && [ "$2" = "ps" ]; then
     echo "caddy running healthy"
     echo "mongo running healthy"
   else
-    echo "caddy running healthy"
-    echo "librechat running healthy"
-    echo "mongo running healthy"
+    if [ "${{MOCK_PROFILE_MODE:-}}" = "standalone,router" ]; then
+      echo "caddy running healthy"
+      echo "librechat running healthy"
+      echo "litellm running healthy"
+      echo "mongo running healthy"
+    elif [ "${{MOCK_PROFILE_MODE:-}}" = "router" ]; then
+      echo "librechat running healthy"
+      echo "litellm running healthy"
+      echo "mongo running healthy"
+    elif [ "${{MOCK_PROFILE_MODE:-}}" = "none" ]; then
+      echo "librechat running healthy"
+      echo "mongo running healthy"
+    else
+      echo "caddy running healthy"
+      echo "librechat running healthy"
+      echo "mongo running healthy"
+    fi
   fi
   exit 0
 fi
@@ -172,10 +193,25 @@ exit 0
             "MONGO_ROOT_PASSWORD=mongorootpass123\n",
             encoding="utf-8",
         )
-        res = self.run_deploy(env_extra={"MOCK_DISABLED_ROUTER": "1"})
+        res = self.run_deploy(env_extra={"MOCK_PROFILE_MODE": "none"})
         self.assertEqual(res.returncode, 0, msg=f"stdout={res.stdout}, stderr={res.stderr}")
         calls = self.docker_log.read_text(encoding="utf-8")
         self.assertNotIn("caddy validate", calls)
+
+    def test_profile_combination_standalone_and_router(self):
+        self.env_path.write_text(
+            "COMPOSE_PROFILES=standalone,router\n"
+            "CHAT_DOMAIN=chat.local\n"
+            "JWT_SECRET=jwtsecret123\n"
+            "MEILI_MASTER_KEY=meilimasterkey123\n"
+            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
+            "LITELLM_MASTER_KEY=litellmmaster123\n",
+            encoding="utf-8",
+        )
+        res = self.run_deploy(env_extra={"MOCK_PROFILE_MODE": "standalone,router"})
+        self.assertEqual(res.returncode, 0, msg=f"stdout={res.stdout}, stderr={res.stderr}")
+        calls = self.docker_log.read_text(encoding="utf-8")
+        self.assertIn("caddy validate", calls)
 
 
 if __name__ == "__main__":

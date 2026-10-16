@@ -80,7 +80,7 @@ def match_repo_digest(image: str, digests: list[str]) -> str:
             if d.startswith(canonical_docker_repo + "@"):
                 return d
 
-    # Exact repository match without registry prefix
+    # Exact repository match without registry domain prefix if single-part repo
     for d in digests:
         d_repo = d.split("@")[0]
         if d_repo == repo or (d_repo.endswith("/" + repo) and "/" not in repo):

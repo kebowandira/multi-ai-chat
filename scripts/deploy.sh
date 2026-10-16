@@ -16,7 +16,17 @@ python3 scripts/configure.py
 echo "validating Compose configuration..."
 docker compose config -q
 
-if grep -qE '^COMPOSE_PROFILES=.*\bstandalone\b' .env; then
+expected_services=$(docker compose config --services 2>/dev/null) || {
+  echo "error: failed to query docker compose services" >&2
+  exit 1
+}
+
+if [ -z "${expected_services//[[:space:]]/}" ]; then
+  echo "error: no expected services found in active Compose profile configuration" >&2
+  exit 1
+fi
+
+if echo "$expected_services" | grep -qx "caddy"; then
   echo "validating Caddy configuration (standalone profile active)..."
   docker compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile
 else
