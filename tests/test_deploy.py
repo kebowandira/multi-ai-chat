@@ -30,11 +30,16 @@ class DeployScriptTests(unittest.TestCase):
         self.env_path.write_text(
             "COMPOSE_PROFILES=standalone\n"
             "CHAT_DOMAIN=chat.local\n"
-            "JWT_SECRET=jwtsecret123\n"
-            "MEILI_MASTER_KEY=meilimasterkey123\n"
-            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
-            "MONGO_APP_PASSWORD=mongoapppass123\n"
-            "POSTGRES_PASSWORD=postgrespass123\n",
+            "JWT_SECRET=" + "a" * 64 + "\n"
+            "JWT_REFRESH_SECRET=" + "b" * 64 + "\n"
+            "CREDS_KEY=" + "c" * 64 + "\n"
+            "CREDS_IV=" + "d" * 32 + "\n"
+            "MEILI_MASTER_KEY=" + "e" * 32 + "\n"
+            "MONGO_ROOT_PASSWORD=" + "f" * 32 + "\n"
+            "MONGO_APP_PASSWORD=" + "g" * 32 + "\n"
+            "POSTGRES_PASSWORD=" + "h" * 32 + "\n"
+            "LITELLM_MASTER_KEY=" + "i" * 32 + "\n"
+            "LITELLM_SALT_KEY=" + "j" * 32 + "\n",
             encoding="utf-8",
         )
 
@@ -56,6 +61,11 @@ fi
 
 if [ "${{MOCK_BAD_COMPOSE:-}}" = "1" ] && [ "$1" = "compose" ] && [ "$2" = "config" ]; then
   echo "error: invalid compose syntax" >&2
+  exit 1
+fi
+
+if [ "${{MOCK_CONFIG_SERVICES_FAIL:-}}" = "1" ] && [ "$1" = "compose" ] && [ "$2" = "config" ] && [ "$3" = "--services" ]; then
+  echo "error: failed to resolve services" >&2
   exit 1
 fi
 
@@ -85,7 +95,9 @@ if [ "$1" = "compose" ] && [ "$2" = "config" ] && [ "$3" = "--services" ]; then
 fi
 
 if [ "$1" = "compose" ] && [ "$2" = "ps" ]; then
-  if [ "${{MOCK_UNHEALTHY_SERVICE:-}}" = "1" ]; then
+  if [ "${{MOCK_PS_EMPTY:-}}" = "1" ]; then
+    echo ""
+  elif [ "${{MOCK_UNHEALTHY_SERVICE:-}}" = "1" ]; then
     echo "caddy running healthy"
     echo "librechat running unhealthy"
     echo "mongodb running healthy"
@@ -112,6 +124,19 @@ if [ "$1" = "compose" ] && [ "$2" = "ps" ]; then
   elif [ "${{MOCK_MISSING_SERVICE:-}}" = "1" ]; then
     echo "caddy running healthy"
     echo "mongodb running healthy"
+  elif [ "${{MOCK_MULTI_REPLICA_FAIL:-}}" = "1" ]; then
+    echo "caddy running healthy"
+    echo "librechat running healthy"
+    echo "librechat running unhealthy"
+    echo "mongodb running healthy"
+  elif [ "${{MOCK_MULTI_REPLICA_OK:-}}" = "1" ]; then
+    echo "caddy running healthy"
+    echo "librechat running healthy"
+    echo "librechat running healthy"
+    echo "mongodb running healthy"
+    echo "meilisearch running healthy"
+    echo "vectordb running healthy"
+    echo "rag_api running healthy"
   else
     echo "caddy running healthy"
     echo "litellm running healthy"
@@ -177,19 +202,37 @@ exit 0
         res = self.run_deploy(env_extra={"MOCK_BAD_COMPOSE": "1"})
         self.assertNotEqual(res.returncode, 0)
 
-    def test_pull_failure_causes_deploy_failure(self):
-        res = self.run_deploy(env_extra={"MOCK_PULL_FAIL": "1"})
+    def test_config_services_discovery_failure_halts_before_mutations(self):
+        res = self.run_deploy(env_extra={"MOCK_CONFIG_SERVICES_FAIL": "1"})
         self.assertNotEqual(res.returncode, 0)
+        self.assertIn("failed to query docker compose services", res.stderr)
+        calls = self.docker_log.read_text(encoding="utf-8")
+        self.assertNotIn("caddy validate", calls)
+        self.assertNotIn("compose pull", calls)
+        self.assertNotIn("compose up", calls)
 
-    def test_empty_expected_services_fails(self):
+    def test_empty_expected_services_halts_before_mutations(self):
         res = self.run_deploy(env_extra={"MOCK_EMPTY_SERVICES": "1"})
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("no expected services found", res.stderr)
+        calls = self.docker_log.read_text(encoding="utf-8")
+        self.assertNotIn("caddy validate", calls)
+        self.assertNotIn("compose pull", calls)
+        self.assertNotIn("compose up", calls)
+
+    def test_pull_failure_causes_deploy_failure(self):
+        res = self.run_deploy(env_extra={"MOCK_PULL_FAIL": "1"})
+        self.assertNotEqual(res.returncode, 0)
 
     def test_ps_failure_causes_deploy_failure(self):
         res = self.run_deploy(env_extra={"MOCK_PS_FAIL": "1"})
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("failed to query docker compose container states", res.stderr)
+
+    def test_ps_empty_causes_deploy_failure(self):
+        res = self.run_deploy(env_extra={"MOCK_PS_EMPTY": "1"})
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("missing/not created", res.stderr)
 
     def test_unhealthy_service_causes_deploy_failure(self):
         res = self.run_deploy(env_extra={"MOCK_UNHEALTHY_SERVICE": "1"})
@@ -216,6 +259,15 @@ exit 0
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("missing", res.stderr)
 
+    def test_multi_replica_fail(self):
+        res = self.run_deploy(env_extra={"MOCK_MULTI_REPLICA_FAIL": "1"})
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("unhealthy", res.stderr)
+
+    def test_multi_replica_ok(self):
+        res = self.run_deploy(env_extra={"MOCK_MULTI_REPLICA_OK": "1"})
+        self.assertEqual(res.returncode, 0, msg=f"stdout={res.stdout}, stderr={res.stderr}")
+
     def test_no_healthcheck_running_service_succeeds(self):
         res = self.run_deploy(env_extra={"MOCK_NO_HEALTHCHECK_SERVICE": "1"})
         self.assertEqual(res.returncode, 0, msg=f"stdout={res.stdout}, stderr={res.stderr}")
@@ -224,11 +276,14 @@ exit 0
     def test_standalone_profile_disabled_skips_caddy_validation(self):
         self.env_path.write_text(
             "COMPOSE_PROFILES=\n"
-            "JWT_SECRET=jwtsecret123\n"
-            "MEILI_MASTER_KEY=meilimasterkey123\n"
-            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
-            "MONGO_APP_PASSWORD=mongoapppass123\n"
-            "POSTGRES_PASSWORD=postgrespass123\n",
+            "JWT_SECRET=" + "a" * 64 + "\n"
+            "JWT_REFRESH_SECRET=" + "b" * 64 + "\n"
+            "CREDS_KEY=" + "c" * 64 + "\n"
+            "CREDS_IV=" + "d" * 32 + "\n"
+            "MEILI_MASTER_KEY=" + "e" * 32 + "\n"
+            "MONGO_ROOT_PASSWORD=" + "f" * 32 + "\n"
+            "MONGO_APP_PASSWORD=" + "g" * 32 + "\n"
+            "POSTGRES_PASSWORD=" + "h" * 32 + "\n",
             encoding="utf-8",
         )
         res = self.run_deploy(env_extra={"MOCK_PROFILE_MODE": "shared"})
@@ -239,12 +294,16 @@ exit 0
     def test_router_profile_mode(self):
         self.env_path.write_text(
             "COMPOSE_PROFILES=router\n"
-            "JWT_SECRET=jwtsecret123\n"
-            "MEILI_MASTER_KEY=meilimasterkey123\n"
-            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
-            "MONGO_APP_PASSWORD=mongoapppass123\n"
-            "POSTGRES_PASSWORD=postgrespass123\n"
-            "LITELLM_MASTER_KEY=litellmmaster123\n",
+            "JWT_SECRET=" + "a" * 64 + "\n"
+            "JWT_REFRESH_SECRET=" + "b" * 64 + "\n"
+            "CREDS_KEY=" + "c" * 64 + "\n"
+            "CREDS_IV=" + "d" * 32 + "\n"
+            "MEILI_MASTER_KEY=" + "e" * 32 + "\n"
+            "MONGO_ROOT_PASSWORD=" + "f" * 32 + "\n"
+            "MONGO_APP_PASSWORD=" + "g" * 32 + "\n"
+            "POSTGRES_PASSWORD=" + "h" * 32 + "\n"
+            "LITELLM_MASTER_KEY=" + "i" * 32 + "\n"
+            "LITELLM_SALT_KEY=" + "j" * 32 + "\n",
             encoding="utf-8",
         )
         res = self.run_deploy(env_extra={"MOCK_PROFILE_MODE": "router"})
@@ -253,12 +312,16 @@ exit 0
     def test_standalone_and_router_profile_mode(self):
         self.env_path.write_text(
             "COMPOSE_PROFILES=standalone,router\n"
-            "JWT_SECRET=jwtsecret123\n"
-            "MEILI_MASTER_KEY=meilimasterkey123\n"
-            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
-            "MONGO_APP_PASSWORD=mongoapppass123\n"
-            "POSTGRES_PASSWORD=postgrespass123\n"
-            "LITELLM_MASTER_KEY=litellmmaster123\n",
+            "JWT_SECRET=" + "a" * 64 + "\n"
+            "JWT_REFRESH_SECRET=" + "b" * 64 + "\n"
+            "CREDS_KEY=" + "c" * 64 + "\n"
+            "CREDS_IV=" + "d" * 32 + "\n"
+            "MEILI_MASTER_KEY=" + "e" * 32 + "\n"
+            "MONGO_ROOT_PASSWORD=" + "f" * 32 + "\n"
+            "MONGO_APP_PASSWORD=" + "g" * 32 + "\n"
+            "POSTGRES_PASSWORD=" + "h" * 32 + "\n"
+            "LITELLM_MASTER_KEY=" + "i" * 32 + "\n"
+            "LITELLM_SALT_KEY=" + "j" * 32 + "\n",
             encoding="utf-8",
         )
         res = self.run_deploy(env_extra={"MOCK_PROFILE_MODE": "standalone_router"})

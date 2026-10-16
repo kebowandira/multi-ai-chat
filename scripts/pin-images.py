@@ -12,6 +12,7 @@ see README.md section 5.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -25,6 +26,9 @@ from common import ROOT, die  # noqa: E402
 COMPOSE_PATH = ROOT / "docker-compose.yml"
 OVERRIDE_PATH = ROOT / "docker-compose.override.yml"
 LOCK_PATH = ROOT / "image-lock.json"
+
+# Enforce exact SHA256 digest format (64 hex characters) using fullmatch.
+DIGEST_REGEX = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
 
 
 def load_compose_services() -> dict[str, str]:
@@ -62,35 +66,76 @@ def normalize_repo(image: str) -> str:
     return image
 
 
+def canonical_repo_variants(repo: str) -> set[str]:
+    """Return all valid canonical repository name representations for symmetric matching."""
+    work = repo
+    if work.startswith("docker.io/"):
+        work = work[len("docker.io/"):]
+    elif work.startswith("index.docker.io/"):
+        work = work[len("index.docker.io/"):]
+
+    first_part = work.split("/")[0] if "/" in work else work
+    has_domain = "." in first_part or ":" in first_part or first_part == "localhost"
+
+    if has_domain:
+        return {repo}
+
+    if "/" in work:
+        if work.startswith("library/"):
+            base = work.split("/", 1)[1]
+            return {
+                base,
+                f"library/{base}",
+                f"docker.io/library/{base}",
+                f"index.docker.io/library/{base}",
+            }
+        return {work, f"docker.io/{work}", f"index.docker.io/{work}"}
+    else:
+        return {
+            work,
+            f"library/{work}",
+            f"docker.io/library/{work}",
+            f"index.docker.io/library/{work}",
+        }
+
+
+def parse_valid_repo_digest(d: str) -> tuple[str, str] | None:
+    """Parse and validate RepoDigest string 'repo@algo:hash'."""
+    if not d or "@" not in d:
+        return None
+    d_repo, _, digest_str = d.partition("@")
+    if not DIGEST_REGEX.fullmatch(digest_str):
+        return None
+    return d_repo, digest_str
+
+
 def match_repo_digest(image: str, digests: list[str]) -> str:
-    valid_digests = [d.strip() for d in digests if d and "@" in d]
+    valid_digests = []
+    for d in digests:
+        parsed = parse_valid_repo_digest(d.strip() if d else "")
+        if parsed:
+            valid_digests.append((d.strip(), parsed[0], parsed[1]))
+
     if not valid_digests:
         die(f"no valid RepoDigests found for {image}")
 
     repo = normalize_repo(image)
+    variants = canonical_repo_variants(repo)
 
-    # Exact match on repo + "@"
-    for d in valid_digests:
-        if d.startswith(repo + "@"):
-            return d
-
-    # Canonical Docker Hub library expansion
-    if "/" not in repo:
-        canonical_docker_repo = f"docker.io/library/{repo}"
-        for d in valid_digests:
-            if d.startswith(canonical_docker_repo + "@"):
-                return d
-
-    # Exact repository match without registry prefix
-    for d in valid_digests:
-        d_repo = d.split("@")[0]
-        if d_repo == repo or (d_repo.endswith("/" + repo) and "/" not in repo):
-            return d
+    for raw, d_repo, _ in valid_digests:
+        if d_repo in variants:
+            return raw
 
     die(f"no matching RepoDigest found for {image} in {digests}")
 
 
 def resolve_digest(image: str) -> str:
+    input_digest = None
+    if "@" in image:
+        _, input_digest = image.split("@", 1)
+        if not DIGEST_REGEX.fullmatch(input_digest):
+            die(f"input image {image} contains malformed digest {input_digest}")
+
     print(f"pulling {image} ...")
     pull = subprocess.run(["docker", "pull", "--quiet", image], capture_output=True, text=True)
     if pull.returncode != 0:
@@ -104,7 +149,14 @@ def resolve_digest(image: str) -> str:
         die(f"could not read RepoDigests for {image}; is it a registry image?")
 
     digests = [d.strip() for d in inspect.stdout.strip().split(",") if d.strip()]
-    return match_repo_digest(image, digests)
+    matched = match_repo_digest(image, digests)
+
+    if input_digest:
+        resolved_digest = matched.split("@", 1)[1]
+        if resolved_digest != input_digest:
+            die(f"requested digest mismatch for {image}: input specifies {input_digest} but resolved {resolved_digest}")
+
+    return matched
 
 
 def main() -> None:
@@ -137,6 +189,13 @@ def main() -> None:
     override_replaced = False
     lock_replaced = False
 
+    # Note on Dual-Rename Limits:
+    # Two separate POSIX file renames (for OVERRIDE_PATH and LOCK_PATH) cannot be
+    # transactionally crash-atomic across process termination or SIGKILL.
+    # The try/except block below performs in-process best-effort rollback (restoring
+    # backups or unlinking newly created files if a failure occurs during writing or renaming).
+    # If the process is forcefully killed between the two renames, or if secondary filesystem
+    # failures occur during rollback, pair consistency cannot be guaranteed.
     try:
         tmp_override.write_text(
             yaml.safe_dump({"services": override_services}, sort_keys=False), encoding="utf-8"
