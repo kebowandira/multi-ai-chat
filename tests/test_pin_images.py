@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -31,14 +31,26 @@ class PinImagesTests(unittest.TestCase):
         matched = pin.match_repo_digest("mongo:latest", digests)
         self.assertEqual(matched, f"docker.io/library/mongo@{SHA256_A}")
 
-    def test_match_repo_digest_docker_hub_aliases(self):
-        digests = [f"library/mongo@{SHA256_A}"]
+    def test_match_repo_digest_symmetric_docker_hub_aliases(self):
+        # Short input -> full qualified RepoDigest
+        digests = [f"docker.io/library/mongo@{SHA256_A}"]
         matched = pin.match_repo_digest("mongo:latest", digests)
-        self.assertEqual(matched, f"library/mongo@{SHA256_A}")
+        self.assertEqual(matched, f"docker.io/library/mongo@{SHA256_A}")
 
-        digests2 = [f"index.docker.io/library/mongo@{SHA256_A}"]
-        matched2 = pin.match_repo_digest("mongo:latest", digests2)
-        self.assertEqual(matched2, f"index.docker.io/library/mongo@{SHA256_A}")
+        # Qualified input -> short RepoDigest
+        digests_short = [f"mongo@{SHA256_A}"]
+        matched2 = pin.match_repo_digest("docker.io/library/mongo:7", digests_short)
+        self.assertEqual(matched2, f"mongo@{SHA256_A}")
+
+        # Qualified user/repo input -> short user/repo RepoDigest
+        digests_user = [f"litellm/litellm@{SHA256_A}"]
+        matched3 = pin.match_repo_digest("docker.io/litellm/litellm:v1", digests_user)
+        self.assertEqual(matched3, f"litellm/litellm@{SHA256_A}")
+
+        # Short user/repo input -> qualified user/repo RepoDigest
+        digests_user_qual = [f"docker.io/litellm/litellm@{SHA256_A}"]
+        matched4 = pin.match_repo_digest("litellm/litellm:latest", digests_user_qual)
+        self.assertEqual(matched4, f"docker.io/litellm/litellm@{SHA256_A}")
 
     def test_match_repo_digest_registry_with_port(self):
         digests = [f"registry.example.com:5000/my-image@{SHA256_A}"]
@@ -57,11 +69,24 @@ class PinImagesTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 pin.match_repo_digest("mongo:latest", digests)
 
+        # Reverse direction: qualified input vs unrelated digest
+        digests2 = [f"mongo@{SHA256_A}"]
+        with patch("sys.stderr", new=io.StringIO()):
+            with self.assertRaises(SystemExit):
+                pin.match_repo_digest("evil.com/mongo:latest", digests2)
+
     def test_match_repo_digest_malformed_digest_fails(self):
         digests = ["malformed_digest_without_at_symbol", "mongo@not_a_valid_sha256"]
         with patch("sys.stderr", new=io.StringIO()):
             with self.assertRaises(SystemExit):
                 pin.match_repo_digest("mongo:latest", digests)
+
+    def test_resolve_digest_malformed_input_fails_before_subprocess(self):
+        with patch("subprocess.run") as mock_sub:
+            with patch("sys.stderr", new=io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    pin.resolve_digest("mongo@sha256:123invalidhex")
+                mock_sub.assert_not_called()
 
     def test_resolve_digest_requested_digest_mismatch_fails(self):
         mock_pull = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
@@ -115,29 +140,53 @@ class PinImagesTests(unittest.TestCase):
         real_write_text = Path.write_text
         real_replace = Path.replace
 
-        def custom_write_text(path_obj, data, encoding="utf-8"):
-            if write_override_err and path_obj == tmp_override:
-                raise OSError("Disk write error override")
-            if write_lock_err and path_obj == tmp_lock:
-                raise OSError("Disk write error lock")
-            return real_write_text(path_obj, data, encoding=encoding)
+        injected_calls = {}
 
-        def custom_replace(path_obj, target):
-            if replace_override_err and path_obj == tmp_override:
-                raise OSError("Rename error override")
-            if replace_lock_err and path_obj == tmp_lock:
-                raise OSError("Rename error lock")
-            return real_replace(path_obj, target)
+        def custom_write_text(self_obj, data, encoding="utf-8"):
+            if write_override_err and self_obj == tmp_override:
+                injected_calls["write_override_fired"] = True
+                raise OSError("Injected write error override")
+            if write_lock_err and self_obj == tmp_lock:
+                injected_calls["write_lock_fired"] = True
+                raise OSError("Injected write error lock")
+            return real_write_text(self_obj, data, encoding=encoding)
+
+        def custom_replace(self_obj, target):
+            if replace_override_err and self_obj == tmp_override:
+                injected_calls["replace_override_fired"] = True
+                raise OSError("Injected rename error override")
+            if replace_lock_err and self_obj == tmp_lock:
+                injected_calls["replace_lock_fired"] = True
+                raise OSError("Injected rename error lock")
+            if self_obj == tmp_override:
+                injected_calls["replace_override_succeeded"] = True
+            return real_replace(self_obj, target)
 
         with patch.object(pin, "OVERRIDE_PATH", override_file):
             with patch.object(pin, "LOCK_PATH", lock_file):
                 with patch.object(pin, "load_compose_services", return_value=mock_services):
                     with patch.object(pin, "resolve_digest", return_value=mock_digest):
-                        with patch.object(Path, "write_text", side_effect=custom_write_text):
-                            with patch.object(Path, "replace", side_effect=custom_replace):
-                                with patch("sys.stderr", new=io.StringIO()):
-                                    with self.assertRaises(SystemExit):
+                        with patch.object(Path, "write_text", autospec=True, side_effect=custom_write_text):
+                            with patch.object(Path, "replace", autospec=True, side_effect=custom_replace):
+                                with patch("sys.stderr", new=io.StringIO()) as err:
+                                    with self.assertRaises(SystemExit) as cm:
                                         pin.main()
+                                    self.assertEqual(cm.exception.code, 1)
+
+                                    err_msg = err.getvalue()
+                                    if write_override_err:
+                                        self.assertTrue(injected_calls.get("write_override_fired"))
+                                        self.assertIn("Injected write error override", err_msg)
+                                    if write_lock_err:
+                                        self.assertTrue(injected_calls.get("write_lock_fired"))
+                                        self.assertIn("Injected write error lock", err_msg)
+                                    if replace_override_err:
+                                        self.assertTrue(injected_calls.get("replace_override_fired"))
+                                        self.assertIn("Injected rename error override", err_msg)
+                                    if replace_lock_err:
+                                        self.assertTrue(injected_calls.get("replace_override_succeeded"))
+                                        self.assertTrue(injected_calls.get("replace_lock_fired"))
+                                        self.assertIn("Injected rename error lock", err_msg)
 
         if preexisting:
             self.assertTrue(override_file.exists())

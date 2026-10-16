@@ -27,7 +27,8 @@ COMPOSE_PATH = ROOT / "docker-compose.yml"
 OVERRIDE_PATH = ROOT / "docker-compose.override.yml"
 LOCK_PATH = ROOT / "image-lock.json"
 
-DIGEST_REGEX = re.compile(r"^[a-zA-Z0-9+_.-]+:[a-fA-F0-9]{32,}$")
+# Enforce exact SHA256 digest format (64 hex characters) using fullmatch.
+DIGEST_REGEX = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
 
 
 def load_compose_services() -> dict[str, str]:
@@ -66,20 +67,35 @@ def normalize_repo(image: str) -> str:
 
 
 def canonical_repo_variants(repo: str) -> set[str]:
-    """Return all valid canonical repository name representations for matching."""
-    first_part = repo.split("/")[0] if "/" in repo else repo
+    """Return all valid canonical repository name representations for symmetric matching."""
+    work = repo
+    if work.startswith("docker.io/"):
+        work = work[len("docker.io/"):]
+    elif work.startswith("index.docker.io/"):
+        work = work[len("index.docker.io/"):]
+
+    first_part = work.split("/")[0] if "/" in work else work
     has_domain = "." in first_part or ":" in first_part or first_part == "localhost"
 
     if has_domain:
         return {repo}
-    elif "/" in repo:
-        return {repo, f"docker.io/{repo}", f"index.docker.io/{repo}"}
+
+    if "/" in work:
+        if work.startswith("library/"):
+            base = work.split("/", 1)[1]
+            return {
+                base,
+                f"library/{base}",
+                f"docker.io/library/{base}",
+                f"index.docker.io/library/{base}",
+            }
+        return {work, f"docker.io/{work}", f"index.docker.io/{work}"}
     else:
         return {
-            repo,
-            f"library/{repo}",
-            f"docker.io/library/{repo}",
-            f"index.docker.io/library/{repo}",
+            work,
+            f"library/{work}",
+            f"docker.io/library/{work}",
+            f"index.docker.io/library/{work}",
         }
 
 
@@ -88,7 +104,7 @@ def parse_valid_repo_digest(d: str) -> tuple[str, str] | None:
     if not d or "@" not in d:
         return None
     d_repo, _, digest_str = d.partition("@")
-    if not DIGEST_REGEX.match(digest_str):
+    if not DIGEST_REGEX.fullmatch(digest_str):
         return None
     return d_repo, digest_str
 
@@ -117,7 +133,7 @@ def resolve_digest(image: str) -> str:
     input_digest = None
     if "@" in image:
         _, input_digest = image.split("@", 1)
-        if not DIGEST_REGEX.match(input_digest):
+        if not DIGEST_REGEX.fullmatch(input_digest):
             die(f"input image {image} contains malformed digest {input_digest}")
 
     print(f"pulling {image} ...")

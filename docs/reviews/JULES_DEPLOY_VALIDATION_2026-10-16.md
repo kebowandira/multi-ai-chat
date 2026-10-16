@@ -2,16 +2,17 @@
 
 - **Assignment Date**: 16 October 2026 (WIB)
 - **Branch**: `deployfix`
-- **Snapshot SHA**: `5c0e552d873bef4597ddafaa61d00690345163dc`
+- **Reviewed Revision SHA**: `90d1712feeeebf338a631da5bfad18834757d49f`
+- **Baseline Snapshot SHA**: `5c0e552d873bef4597ddafaa61d00690345163dc`
 - **Environment**: Python 3.12.13, Simulated Docker Harness
 
 ### Changed File SHA256 Manifest
 - `scripts/deploy.sh`: `d6ad80c459d2b9675a6b7398b730415ea27749778230bec637d145685a655436`
 - `scripts/preflight.py`: `e3c580d59759ed1784bcde7d00e93ba033d10cdcb8bdc9315f4cdd30681e7a49`
-- `scripts/pin-images.py`: `2ebb5b9fc57a1d4e98ead6d3e60c930901585ddb839cdaa8f517af30eb817d71`
+- `scripts/pin-images.py`: `cfaaf4e179d20fee9afb8daf75e36106e073b0bc226cc427e3daa724d80347ff`
 - `tests/test_deploy.py`: `5afaa5f2fbd30a1a2d34fb02a600b00f600d2c48f81dbb87ad9c7a5cca67e5c1`
 - `tests/test_preflight.py`: `bc4a57607dc6befb7769c4b24e13961d14352a4b9626fca52bdf051a80ebc50b`
-- `tests/test_pin_images.py`: `99a52ae6e59599dcbbf986af6ea93337bc966591670017bda344c3e0fc11d9e6`
+- `tests/test_pin_images.py`: `18914ad6091b2373b6dc9a388bcefb4fcf9fbeb7a7db1f6a7933f1bdf9fca299`
 
 ---
 
@@ -19,8 +20,8 @@
 
 | Check | Baseline Result | Final Result | Notes |
 |---|---|---|---|
-| `scripts/check_source.py` | PASS (48 files) | PASS (51 files) | Allowlist source publication guard |
-| `unittest discover -s tests -v` | FAIL (12 failures, 2 errors / PyYAML missing) | PASS (80/80 passed) | Full test suite across preflight, deploy, pin-images & policy |
+| `scripts/check_source.py` | PASS (48 files) | PASS (57 files) | Allowlist source publication guard |
+| `unittest discover -s tests -v` | FAIL (12 failures, 2 errors / PyYAML missing) | PASS (81/81 passed) | Full test suite across preflight, deploy, pin-images & policy |
 | `bash -n scripts/deploy.sh` | PASS | PASS | Shell syntax validation |
 | `compileall scripts router tests` | PASS | PASS | Python bytecode compilation |
 | `git diff --check` | PASS | PASS | Whitespace & diff safety |
@@ -30,21 +31,19 @@
 ## Literal Test Execution Output
 
 ```
-Ran 80 tests in 8.602s
+Ran 81 tests in 8.033s
 
 OK
 ```
 
 ---
 
-## Summary of Corrections Implemented
+## Summary of Corrections Implemented (Including Follow-up Findings F1–F3)
 
-### 1. `scripts/pin-images.py`
-- **Canonical Repository Matching**: Updated `match_repo_digest` to construct exact canonical repository variants (`repo`, `library/repo`, `docker.io/library/repo`, `index.docker.io/library/repo`, `docker.io/user/repo`, `host:port/repo`). Shortnames no longer suffix-match unrelated registries (e.g. `evil.com/mongo` will not match `mongo`).
-- **Digest Format Validation**: Added `DIGEST_REGEX` validation (`^[a-zA-Z0-9+_.-]+:[a-fA-F0-9]{32,}$`) to reject malformed RepoDigests or missing `@` delimiters.
-- **Requested Digest Mismatch Enforced**: If the input image is already pinned to a digest, `resolve_digest` verifies that the resolved digest matches the input digest and exits with an error on mismatch.
-- **Mocked Unit Tests & Failure Injections**: Rewrote `tests/test_pin_images.py` to use 100% mocked Docker calls (`load_compose_services` and `resolve_digest`), testing Docker Hub aliases, host:port repositories, unrelated registry prevention, malformed digests, digest mismatches, and injected write/rename failures for both preexisting and absent files.
-- **Documented Dual-Rename Limitations**: Clearly documented in code comments and unit tests that two separate file renames (`docker-compose.override.yml` and `image-lock.json`) do not provide crash-atomic pair replacement across process SIGKILL or secondary filesystem errors.
+### 1. `scripts/pin-images.py` & `tests/test_pin_images.py`
+- **F1 (Strict SHA256 Regex & Pre-Subprocess Validation)**: Updated `DIGEST_REGEX` to enforce exact 64-character SHA256 hex strings (`^sha256:[0-9a-fA-F]{64}$`) with `fullmatch` to reject bogus algorithms or invalid hex lengths. In `resolve_digest`, malformed input images (e.g. `mongo@sha256:invalid`) are validated and rejected BEFORE `subprocess.run` calls, verified via `test_resolve_digest_malformed_input_fails_before_subprocess`.
+- **F2 (Injected Rollback Failure Verification)**: Refactored `_run_pin_main_with_injected_error` in `tests/test_pin_images.py` to use `autospec=True` on `Path.write_text` and `Path.replace`. Explicitly asserted that injected callbacks fire, that `stderr` reports the exact injected `OSError` string (and not an unrelated `TypeError`), and that for second-rename failures, the first rename replacement actually succeeded before the second rename raised `OSError`.
+- **F3 (Symmetric Repository Canonicalization)**: Updated `canonical_repo_variants` in `scripts/pin-images.py` so repository normalization is completely symmetric. Qualified inputs like `docker.io/library/mongo:7` match short RepoDigests (`mongo@sha256:...`), and short inputs like `mongo:latest` match qualified RepoDigests (`docker.io/library/mongo@sha256:...`). Symmetric matching also covers user/repo images (`docker.io/litellm/litellm:v1` and `litellm/litellm:latest`), while preserving strict rejection of unrelated registries and host:port repositories.
 
 ### 2. `scripts/preflight.py`
 - **Mandatory Secrets Audit**: Updated `check_env()` to enforce required secrets for base services (`JWT_SECRET`, `JWT_REFRESH_SECRET`, `CREDS_KEY`, `CREDS_IV`, `MEILI_MASTER_KEY`, `MONGO_ROOT_PASSWORD`, `MONGO_APP_PASSWORD`, `POSTGRES_PASSWORD`) and router profile (`LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`).
@@ -72,7 +71,7 @@ OK
 | **Multi-Replica Container Checks** | COVERED | `test_deploy.py::test_multi_replica_fail` & `test_multi_replica_ok`: Verified multi-replica line evaluation. |
 | **No-Healthcheck Running Service** | COVERED | `test_deploy.py::test_no_healthcheck_running_service_succeeds`: Verified running services without healthchecks succeed. |
 | **Preflight Secret Audit & Constraints** | COVERED | `test_preflight.py`: Verified mandatory secrets, length/hex constraints, and shell profile precedence without leaking secret values. |
-| **Pin Images Repos, Digests & Rollback** | COVERED | `test_pin_images.py`: Verified repository canonicalization, malformed digest rejection, requested digest mismatch checks, and write/rename failure injected rollbacks. |
+| **Pin Images Repos, Digests & Rollback** | COVERED | `test_pin_images.py`: Verified symmetric repository canonicalization, malformed digest rejection, requested digest mismatch checks, pre-subprocess malformed input checks, and write/rename failure injected rollbacks. |
 
 ---
 
