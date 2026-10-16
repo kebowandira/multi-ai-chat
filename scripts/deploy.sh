@@ -16,7 +16,8 @@ python3 scripts/configure.py
 echo "validating Compose configuration..."
 docker compose config -q
 
-if grep -qE '^COMPOSE_PROFILES=.*\bstandalone\b' .env; then
+expected_init_services=$(docker compose config --services 2>/dev/null || true)
+if echo "$expected_init_services" | grep -qw "caddy"; then
   echo "validating Caddy configuration (standalone profile active)..."
   docker compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile
 else

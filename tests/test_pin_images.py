@@ -1,3 +1,4 @@
+import io
 import importlib
 import json
 import os
@@ -34,16 +35,34 @@ class PinImagesTests(unittest.TestCase):
 
     def test_match_repo_digest_unrelated_repo_fails(self):
         digests = ["other.example/evil@sha256:abc"]
-        with self.assertRaises(SystemExit):
-            pin.match_repo_digest("trusted.example/team/app:v1", digests)
+        with patch("sys.stderr", new=io.StringIO()):
+            with self.assertRaises(SystemExit):
+                pin.match_repo_digest("trusted.example/team/app:v1", digests)
+
+    def test_match_repo_digest_malformed_digest_fails(self):
+        digests = ["malformed_digest_without_at_symbol"]
+        with patch("sys.stderr", new=io.StringIO()):
+            with self.assertRaises(SystemExit):
+                pin.match_repo_digest("mongo:latest", digests)
+
+    def test_load_compose_services_includes_all_profiles(self):
+        mock_output = json.dumps({"services": {"caddy": {"image": "caddy:2"}, "litellm": {"image": "litellm:latest"}}})
+        mock_res = subprocess.CompletedProcess(args=[], returncode=0, stdout=mock_output, stderr="")
+        with patch("subprocess.run", return_value=mock_res) as mock_run:
+            services = pin.load_compose_services()
+            self.assertEqual(services, {"caddy": "caddy:2", "litellm": "litellm:latest"})
+            called_cmd = mock_run.call_args[0][0]
+            self.assertIn("--profile", called_cmd)
+            self.assertIn("*", called_cmd)
 
     def test_load_compose_services_config_failure_dies(self):
         mock_res = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="Compose config error")
         with patch("subprocess.run", return_value=mock_res):
-            with self.assertRaises(SystemExit):
-                pin.load_compose_services()
+            with patch("sys.stderr", new=io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    pin.load_compose_services()
 
-    def test_atomic_file_preservation_on_failure(self):
+    def test_atomic_file_preservation_and_rollback_on_failure(self):
         override_file = self.tmp_path / "docker-compose.override.yml"
         lock_file = self.tmp_path / "image-lock.json"
 
@@ -57,8 +76,9 @@ class PinImagesTests(unittest.TestCase):
             with patch.object(pin, "OVERRIDE_PATH", override_file):
                 with patch.object(pin, "LOCK_PATH", lock_file):
                     with patch.object(pin, "resolve_digest", side_effect=SystemExit(1)):
-                        with self.assertRaises(SystemExit):
-                            pin.main()
+                        with patch("sys.stderr", new=io.StringIO()):
+                            with self.assertRaises(SystemExit):
+                                pin.main()
 
         # Existing files must be preserved unchanged
         self.assertEqual(override_file.read_text(encoding="utf-8"), "existing override")

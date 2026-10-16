@@ -3,6 +3,8 @@
 the first hard failure; prints warnings for soft issues and keeps going."""
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -69,7 +71,8 @@ def check_env() -> None:
     if missing_keys:
         warn(f".env is missing keys present in .env.example: {', '.join(sorted(missing_keys))}")
 
-    profiles = set(p.strip() for p in (values.get("COMPOSE_PROFILES") or "").split(",") if p.strip())
+    compose_profiles_str = os.environ.get("COMPOSE_PROFILES", values.get("COMPOSE_PROFILES", ""))
+    profiles = set(p.strip() for p in compose_profiles_str.split(",") if p.strip())
 
     if "standalone" in profiles:
         chat_domain = values.get("CHAT_DOMAIN", "chat.example.com")
@@ -82,7 +85,13 @@ def check_env() -> None:
     else:
         print(f"ok: active providers: {', '.join(sorted(providers))}")
 
-    required_secrets = ["JWT_SECRET", "MEILI_MASTER_KEY", "MONGO_ROOT_PASSWORD"]
+    required_secrets = [
+        "JWT_SECRET",
+        "MEILI_MASTER_KEY",
+        "MONGO_ROOT_PASSWORD",
+        "MONGO_APP_PASSWORD",
+        "POSTGRES_PASSWORD",
+    ]
     if "router" in profiles:
         required_secrets.append("LITELLM_MASTER_KEY")
 
@@ -91,20 +100,61 @@ def check_env() -> None:
             fail(f".env variable {secret} is missing or blank; run: python3 scripts/init-env.py")
 
 
+def is_project_container_running(service_name: str) -> bool:
+    try:
+        res = subprocess.run(["docker", "compose", "ps", "--format", "json"], capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            for line in res.stdout.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, list):
+                        for item in data:
+                            if item.get("Service") == service_name and item.get("State") == "running":
+                                return True
+                    elif isinstance(data, dict):
+                        if data.get("Service") == service_name and data.get("State") == "running":
+                            return True
+                except Exception:
+                    pass
+        res2 = subprocess.run(["docker", "compose", "ps"], capture_output=True, text=True)
+        if res2.returncode == 0:
+            for line in res2.stdout.splitlines():
+                parts = line.split()
+                if parts and parts[0] == service_name and "running" in line:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def check_ports() -> None:
     import socket
 
     if not ENV_PATH.exists():
         return
     values = read_env_file(ENV_PATH)
-    profiles = set(p.strip() for p in (values.get("COMPOSE_PROFILES") or "").split(",") if p.strip())
+    compose_profiles_str = os.environ.get("COMPOSE_PROFILES", values.get("COMPOSE_PROFILES", ""))
+    profiles = set(p.strip() for p in compose_profiles_str.split(",") if p.strip())
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        if s.connect_ex(("127.0.0.1", 3080)) == 0:
+            if is_project_container_running("librechat"):
+                print("ok: port 3080 bound by existing project container 'librechat'")
+            else:
+                warn("port 3080 is in use by another process/project; binding may conflict")
 
     if "standalone" in profiles:
         for port in (80, 443):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(0.5)
                 if s.connect_ex(("127.0.0.1", port)) == 0:
-                    warn(f"port {port} already has a listener; standalone Caddy will fail to bind if not already running")
+                    if is_project_container_running("caddy"):
+                        print(f"ok: port {port} bound by existing project container 'caddy'")
+                    else:
+                        warn(f"port {port} already has a listener; standalone Caddy will fail to bind if not already running")
 
 
 def main() -> None:
