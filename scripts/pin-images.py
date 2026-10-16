@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Pull each service's configured image, resolve its immutable registry
 digest, and write docker-compose.override.yml + image-lock.json pinning to
-those digests. Does not start any container. Includes the litellm image even
-when COMPOSE_PROFILES does not enable the router profile, so enabling it
-later is already pinned.
+those digests. Does not start any container. Includes optional profile images
+(caddy, litellm) even when COMPOSE_PROFILES does not enable them, so enabling
+them later is already pinned.
 
 This makes the *chosen* artifacts reproducible. It does not substitute for
 reading upstream release notes/security advisories before trusting them —
@@ -28,8 +28,8 @@ LOCK_PATH = ROOT / "image-lock.json"
 
 
 def load_compose_services() -> dict[str, str]:
-    """Resolve active Compose services and their interpolated image names without loading docker-compose.override.yml."""
-    cmd = ["docker", "compose", "-f", str(COMPOSE_PATH), "config", "--format", "json"]
+    """Resolve active Compose services and their interpolated image names including optional profiles."""
+    cmd = ["docker", "compose", "-f", str(COMPOSE_PATH), "--profile", "*", "config", "--format", "json"]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         die(f"docker compose config failed:\n{res.stderr.strip()}")
@@ -63,25 +63,26 @@ def normalize_repo(image: str) -> str:
 
 
 def match_repo_digest(image: str, digests: list[str]) -> str:
-    if not digests:
-        die(f"no RepoDigests found for {image}")
+    valid_digests = [d.strip() for d in digests if d and "@" in d]
+    if not valid_digests:
+        die(f"no valid RepoDigests found for {image}")
 
     repo = normalize_repo(image)
 
     # Exact match on repo + "@"
-    for d in digests:
+    for d in valid_digests:
         if d.startswith(repo + "@"):
             return d
 
     # Canonical Docker Hub library expansion
     if "/" not in repo:
         canonical_docker_repo = f"docker.io/library/{repo}"
-        for d in digests:
+        for d in valid_digests:
             if d.startswith(canonical_docker_repo + "@"):
                 return d
 
     # Exact repository match without registry prefix
-    for d in digests:
+    for d in valid_digests:
         d_repo = d.split("@")[0]
         if d_repo == repo or (d_repo.endswith("/" + repo) and "/" not in repo):
             return d
@@ -122,21 +123,68 @@ def main() -> None:
     tmp_override = OVERRIDE_PATH.with_suffix(".tmp")
     tmp_lock = LOCK_PATH.with_suffix(".tmp")
 
-    tmp_override.write_text(
-        yaml.safe_dump({"services": override_services}, sort_keys=False), encoding="utf-8"
-    )
-    tmp_lock.write_text(
-        json.dumps(
-            {"resolved_at": datetime.now(timezone.utc).isoformat(), "images": lock},
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    bak_override = OVERRIDE_PATH.with_suffix(".bak")
+    bak_lock = LOCK_PATH.with_suffix(".bak")
 
-    tmp_override.replace(OVERRIDE_PATH)
-    tmp_lock.replace(LOCK_PATH)
+    override_existed = OVERRIDE_PATH.exists()
+    lock_existed = LOCK_PATH.exists()
+
+    if override_existed:
+        bak_override.write_bytes(OVERRIDE_PATH.read_bytes())
+    if lock_existed:
+        bak_lock.write_bytes(LOCK_PATH.read_bytes())
+
+    override_replaced = False
+    lock_replaced = False
+
+    try:
+        tmp_override.write_text(
+            yaml.safe_dump({"services": override_services}, sort_keys=False), encoding="utf-8"
+        )
+        tmp_lock.write_text(
+            json.dumps(
+                {"resolved_at": datetime.now(timezone.utc).isoformat(), "images": lock},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        tmp_override.replace(OVERRIDE_PATH)
+        override_replaced = True
+
+        tmp_lock.replace(LOCK_PATH)
+        lock_replaced = True
+
+    except Exception as exc:
+        if override_replaced:
+            if override_existed and bak_override.exists():
+                bak_override.replace(OVERRIDE_PATH)
+            elif OVERRIDE_PATH.exists():
+                OVERRIDE_PATH.unlink()
+
+        if lock_replaced:
+            if lock_existed and bak_lock.exists():
+                bak_lock.replace(LOCK_PATH)
+            elif LOCK_PATH.exists():
+                LOCK_PATH.unlink()
+
+        for t in (tmp_override, tmp_lock, bak_override, bak_lock):
+            if t.exists():
+                try:
+                    t.unlink()
+                except Exception:
+                    pass
+
+        die(f"failed to update image lock files cleanly: {exc}")
+
+    for bak in (bak_override, bak_lock):
+        if bak.exists():
+            try:
+                bak.unlink()
+            except Exception:
+                pass
 
     print(f"wrote {OVERRIDE_PATH}")
     print(f"wrote {LOCK_PATH}")

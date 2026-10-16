@@ -1,3 +1,4 @@
+import io
 import os
 import shutil
 import subprocess
@@ -23,13 +24,13 @@ class PreflightTests(unittest.TestCase):
 
     def test_check_tool_missing_required_raises(self):
         with patch("shutil.which", return_value=None):
-            with self.assertRaises(SystemExit) as cm:
-                preflight.check_tool("docker", required=True)
-            self.assertEqual(cm.exception.code, 1)
+            with patch("sys.stderr", new=io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    preflight.check_tool("docker", required=True)
+                self.assertEqual(cm.exception.code, 1)
 
     def test_check_tool_missing_optional_warns(self):
         with patch("shutil.which", return_value=None):
-            # Should not exit when required=False
             preflight.check_tool("gh", required=False)
 
     def test_check_compose_version_valid(self):
@@ -40,41 +41,65 @@ class PreflightTests(unittest.TestCase):
     def test_check_compose_version_too_old_fails(self):
         mock_res = subprocess.CompletedProcess(args=[], returncode=0, stdout="v2.29.0\n", stderr="")
         with patch("subprocess.run", return_value=mock_res):
-            with self.assertRaises(SystemExit) as cm:
-                preflight.check_compose_version()
-            self.assertEqual(cm.exception.code, 1)
+            with patch("sys.stderr", new=io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    preflight.check_compose_version()
+                self.assertEqual(cm.exception.code, 1)
 
     def test_check_compose_version_cmd_error_fails(self):
         mock_res = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="plugin missing")
         with patch("subprocess.run", return_value=mock_res):
-            with self.assertRaises(SystemExit) as cm:
-                preflight.check_compose_version()
-            self.assertEqual(cm.exception.code, 1)
+            with patch("sys.stderr", new=io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    preflight.check_compose_version()
+                self.assertEqual(cm.exception.code, 1)
 
     def test_check_docker_daemon_unreachable_fails(self):
         mock_res = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="Is the docker daemon running?")
         with patch("subprocess.run", return_value=mock_res):
-            with self.assertRaises(SystemExit) as cm:
-                preflight.check_docker_daemon()
-            self.assertEqual(cm.exception.code, 1)
+            with patch("sys.stderr", new=io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    preflight.check_docker_daemon()
+                self.assertEqual(cm.exception.code, 1)
 
     def test_check_env_missing_secret_fails(self):
         env_file = self.tmp_path / ".env"
-        env_file.write_text("JWT_SECRET=\nMEILI_MASTER_KEY=key\nMONGO_ROOT_PASSWORD=pass\n", encoding="utf-8")
+        env_file.write_text("JWT_SECRET=\nMEILI_MASTER_KEY=key\nMONGO_ROOT_PASSWORD=pass\nMONGO_APP_PASSWORD=app\nPOSTGRES_PASSWORD=pg\n", encoding="utf-8")
         with patch.object(preflight, "ENV_PATH", env_file):
             with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
-                with self.assertRaises(SystemExit) as cm:
-                    preflight.check_env()
-                self.assertEqual(cm.exception.code, 1)
+                with patch("sys.stderr", new=io.StringIO()):
+                    with self.assertRaises(SystemExit) as cm:
+                        preflight.check_env()
+                    self.assertEqual(cm.exception.code, 1)
 
     def test_check_env_router_missing_master_key_fails(self):
         env_file = self.tmp_path / ".env"
-        env_file.write_text("COMPOSE_PROFILES=router\nJWT_SECRET=jwt\nMEILI_MASTER_KEY=key\nMONGO_ROOT_PASSWORD=pass\nLITELLM_MASTER_KEY=\n", encoding="utf-8")
+        env_file.write_text("COMPOSE_PROFILES=router\nJWT_SECRET=jwt\nMEILI_MASTER_KEY=key\nMONGO_ROOT_PASSWORD=pass\nMONGO_APP_PASSWORD=app\nPOSTGRES_PASSWORD=pg\nLITELLM_MASTER_KEY=\n", encoding="utf-8")
         with patch.object(preflight, "ENV_PATH", env_file):
             with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
-                with self.assertRaises(SystemExit) as cm:
-                    preflight.check_env()
-                self.assertEqual(cm.exception.code, 1)
+                with patch("sys.stderr", new=io.StringIO()):
+                    with self.assertRaises(SystemExit) as cm:
+                        preflight.check_env()
+                    self.assertEqual(cm.exception.code, 1)
+
+    def test_check_env_shell_env_overrides_compose_profiles(self):
+        env_file = self.tmp_path / ".env"
+        env_file.write_text("COMPOSE_PROFILES=standalone\nJWT_SECRET=jwt\nMEILI_MASTER_KEY=key\nMONGO_ROOT_PASSWORD=pass\nMONGO_APP_PASSWORD=app\nPOSTGRES_PASSWORD=pg\nLITELLM_MASTER_KEY=\n", encoding="utf-8")
+        with patch.object(preflight, "ENV_PATH", env_file):
+            with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
+                with patch.dict(os.environ, {"COMPOSE_PROFILES": "router"}):
+                    with patch("sys.stderr", new=io.StringIO()):
+                        with self.assertRaises(SystemExit) as cm:
+                            preflight.check_env()
+                        self.assertEqual(cm.exception.code, 1)
+
+    def test_check_ports_same_project_vs_conflict(self):
+        env_file = self.tmp_path / ".env"
+        env_file.write_text("COMPOSE_PROFILES=standalone\n", encoding="utf-8")
+        with patch.object(preflight, "ENV_PATH", env_file):
+            with patch.object(preflight, "is_project_container_running", return_value=True):
+                # Probing sockets won't throw when mocked or on loopback
+                preflight.check_ports()
 
 
 if __name__ == "__main__":

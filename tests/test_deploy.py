@@ -14,30 +14,30 @@ class DeployScriptTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
 
-        # Set up mock project directory structure
         self.bin_dir = self.tmp_path / "bin"
         self.bin_dir.mkdir()
 
-        # Copy scripts directory into project root
         self.proj_scripts = self.tmp_path / "scripts"
         shutil.copytree(ROOT / "scripts", self.proj_scripts)
 
-        # Create dummy source templates
+        self.proj_router = self.tmp_path / "router"
+        shutil.copytree(ROOT / "router", self.proj_router)
+
         (self.tmp_path / "librechat.yaml").write_text("endpoints:\n  custom: []\n", encoding="utf-8")
         (self.tmp_path / "litellm_config.yaml").write_text("model_list: []\n", encoding="utf-8")
 
-        # Create dummy .env file
         self.env_path = self.tmp_path / ".env"
         self.env_path.write_text(
             "COMPOSE_PROFILES=standalone\n"
             "CHAT_DOMAIN=chat.local\n"
             "JWT_SECRET=jwtsecret123\n"
             "MEILI_MASTER_KEY=meilimasterkey123\n"
-            "MONGO_ROOT_PASSWORD=mongorootpass123\n",
+            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
+            "MONGO_APP_PASSWORD=mongoapppass123\n"
+            "POSTGRES_PASSWORD=postgrespass123\n",
             encoding="utf-8",
         )
 
-        # Create fake docker executable
         self.fake_docker = self.bin_dir / "docker"
         self.docker_log = self.tmp_path / "docker_calls.log"
 
@@ -64,13 +64,22 @@ if [ "${{MOCK_PULL_FAIL:-}}" = "1" ] && [ "$1" = "compose" ] && [ "$2" = "pull" 
   exit 1
 fi
 
+if [ "${{MOCK_PS_FAIL:-}}" = "1" ] && [ "$1" = "compose" ] && [ "$2" = "ps" ]; then
+  echo "error: docker compose ps command failed" >&2
+  exit 1
+fi
+
 if [ "$1" = "compose" ] && [ "$2" = "config" ] && [ "$3" = "--services" ]; then
   if [ "${{MOCK_EMPTY_SERVICES:-}}" = "1" ]; then
     echo ""
-  elif [ "${{MOCK_DISABLED_ROUTER:-}}" = "1" ]; then
-    echo -e "librechat\\nmongo"
+  elif [ "${{MOCK_PROFILE_MODE:-}}" = "shared" ]; then
+    echo -e "librechat\\nmongodb\\nmeilisearch\\nvectordb\\nrag_api"
+  elif [ "${{MOCK_PROFILE_MODE:-}}" = "router" ]; then
+    echo -e "litellm\\nlibrechat\\nmongodb\\nmeilisearch\\nvectordb\\nrag_api"
+  elif [ "${{MOCK_PROFILE_MODE:-}}" = "standalone_router" ]; then
+    echo -e "caddy\\nlitellm\\nlibrechat\\nmongodb\\nmeilisearch\\nvectordb\\nrag_api"
   else
-    echo -e "caddy\\nlibrechat\\nmongo"
+    echo -e "caddy\\nlibrechat\\nmongodb\\nmeilisearch\\nvectordb\\nrag_api"
   fi
   exit 0
 fi
@@ -79,14 +88,38 @@ if [ "$1" = "compose" ] && [ "$2" = "ps" ]; then
   if [ "${{MOCK_UNHEALTHY_SERVICE:-}}" = "1" ]; then
     echo "caddy running healthy"
     echo "librechat running unhealthy"
-    echo "mongo running healthy"
+    echo "mongodb running healthy"
+  elif [ "${{MOCK_EXITED_SERVICE:-}}" = "1" ]; then
+    echo "caddy running healthy"
+    echo "librechat exited"
+    echo "mongodb running healthy"
+  elif [ "${{MOCK_RESTARTING_SERVICE:-}}" = "1" ]; then
+    echo "caddy running healthy"
+    echo "librechat restarting"
+    echo "mongodb running healthy"
+  elif [ "${{MOCK_STARTING_SERVICE:-}}" = "1" ]; then
+    echo "caddy running healthy"
+    echo "librechat running starting"
+    echo "mongodb running healthy"
+  elif [ "${{MOCK_NO_HEALTHCHECK_SERVICE:-}}" = "1" ]; then
+    echo "caddy running healthy"
+    echo "litellm running healthy"
+    echo "librechat running"
+    echo "mongodb running healthy"
+    echo "meilisearch running healthy"
+    echo "vectordb running healthy"
+    echo "rag_api running healthy"
   elif [ "${{MOCK_MISSING_SERVICE:-}}" = "1" ]; then
     echo "caddy running healthy"
-    echo "mongo running healthy"
+    echo "mongodb running healthy"
   else
     echo "caddy running healthy"
+    echo "litellm running healthy"
     echo "librechat running healthy"
-    echo "mongo running healthy"
+    echo "mongodb running healthy"
+    echo "meilisearch running healthy"
+    echo "vectordb running healthy"
+    echo "rag_api running healthy"
   fi
   exit 0
 fi
@@ -96,7 +129,6 @@ exit 0
         self.fake_docker.write_text(fake_docker_script, encoding="utf-8")
         self.fake_docker.chmod(0o755)
 
-        # Create fake git executable
         fake_git = self.bin_dir / "git"
         fake_git.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         fake_git.chmod(0o755)
@@ -109,7 +141,7 @@ exit 0
         env = {
             **os.environ,
             "PATH": f"{self.bin_dir}:{venv_bin}:{os.environ.get('PATH', '')}",
-            "DEPLOY_TIMEOUT_SEC": "2",
+            "DEPLOY_TIMEOUT_SEC": "1",
             "DEPLOY_SLEEP_SEC": "0",
         }
         if env_extra:
@@ -154,28 +186,85 @@ exit 0
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("no expected services found", res.stderr)
 
+    def test_ps_failure_causes_deploy_failure(self):
+        res = self.run_deploy(env_extra={"MOCK_PS_FAIL": "1"})
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("failed to query docker compose container states", res.stderr)
+
     def test_unhealthy_service_causes_deploy_failure(self):
         res = self.run_deploy(env_extra={"MOCK_UNHEALTHY_SERVICE": "1"})
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("unhealthy", res.stderr)
+
+    def test_exited_service_causes_deploy_failure(self):
+        res = self.run_deploy(env_extra={"MOCK_EXITED_SERVICE": "1"})
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("exited", res.stderr)
+
+    def test_restarting_service_causes_deploy_failure(self):
+        res = self.run_deploy(env_extra={"MOCK_RESTARTING_SERVICE": "1"})
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("restarting", res.stderr)
+
+    def test_starting_service_timeout_causes_deploy_failure(self):
+        res = self.run_deploy(env_extra={"MOCK_STARTING_SERVICE": "1"})
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("starting", res.stderr)
 
     def test_missing_service_causes_deploy_failure(self):
         res = self.run_deploy(env_extra={"MOCK_MISSING_SERVICE": "1"})
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("missing", res.stderr)
 
+    def test_no_healthcheck_running_service_succeeds(self):
+        res = self.run_deploy(env_extra={"MOCK_NO_HEALTHCHECK_SERVICE": "1"})
+        self.assertEqual(res.returncode, 0, msg=f"stdout={res.stdout}, stderr={res.stderr}")
+        self.assertIn("all services healthy", res.stdout)
+
     def test_standalone_profile_disabled_skips_caddy_validation(self):
         self.env_path.write_text(
             "COMPOSE_PROFILES=\n"
             "JWT_SECRET=jwtsecret123\n"
             "MEILI_MASTER_KEY=meilimasterkey123\n"
-            "MONGO_ROOT_PASSWORD=mongorootpass123\n",
+            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
+            "MONGO_APP_PASSWORD=mongoapppass123\n"
+            "POSTGRES_PASSWORD=postgrespass123\n",
             encoding="utf-8",
         )
-        res = self.run_deploy(env_extra={"MOCK_DISABLED_ROUTER": "1"})
+        res = self.run_deploy(env_extra={"MOCK_PROFILE_MODE": "shared"})
         self.assertEqual(res.returncode, 0, msg=f"stdout={res.stdout}, stderr={res.stderr}")
         calls = self.docker_log.read_text(encoding="utf-8")
         self.assertNotIn("caddy validate", calls)
+
+    def test_router_profile_mode(self):
+        self.env_path.write_text(
+            "COMPOSE_PROFILES=router\n"
+            "JWT_SECRET=jwtsecret123\n"
+            "MEILI_MASTER_KEY=meilimasterkey123\n"
+            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
+            "MONGO_APP_PASSWORD=mongoapppass123\n"
+            "POSTGRES_PASSWORD=postgrespass123\n"
+            "LITELLM_MASTER_KEY=litellmmaster123\n",
+            encoding="utf-8",
+        )
+        res = self.run_deploy(env_extra={"MOCK_PROFILE_MODE": "router"})
+        self.assertEqual(res.returncode, 0, msg=f"stdout={res.stdout}, stderr={res.stderr}")
+
+    def test_standalone_and_router_profile_mode(self):
+        self.env_path.write_text(
+            "COMPOSE_PROFILES=standalone,router\n"
+            "JWT_SECRET=jwtsecret123\n"
+            "MEILI_MASTER_KEY=meilimasterkey123\n"
+            "MONGO_ROOT_PASSWORD=mongorootpass123\n"
+            "MONGO_APP_PASSWORD=mongoapppass123\n"
+            "POSTGRES_PASSWORD=postgrespass123\n"
+            "LITELLM_MASTER_KEY=litellmmaster123\n",
+            encoding="utf-8",
+        )
+        res = self.run_deploy(env_extra={"MOCK_PROFILE_MODE": "standalone_router"})
+        self.assertEqual(res.returncode, 0, msg=f"stdout={res.stdout}, stderr={res.stderr}")
+        calls = self.docker_log.read_text(encoding="utf-8")
+        self.assertIn("caddy validate", calls)
 
 
 if __name__ == "__main__":
