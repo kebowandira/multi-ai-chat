@@ -16,6 +16,8 @@ from router.policy import (
     Policy,
     RoutingError,
     enforce_input_limit,
+    enforce_output_limit,
+    enforce_text_only,
     resolve_route,
     strip_anchor_prefix,
 )
@@ -40,6 +42,8 @@ class ClassifyingRouter(CustomLogger):
         if model not in ALIAS_ROUTES:
             return data
 
+        enforce_text_only(data)
+        enforce_output_limit(data, self.policy)
         messages = data.get("messages", [])
         enforce_input_limit(messages, self.policy)
         data["messages"] = strip_anchor_prefix(messages)
