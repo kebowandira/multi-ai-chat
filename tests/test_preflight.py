@@ -62,43 +62,107 @@ class PreflightTests(unittest.TestCase):
                     preflight.check_docker_daemon()
                 self.assertEqual(cm.exception.code, 1)
 
-    def test_check_env_missing_secret_fails(self):
-        env_file = self.tmp_path / ".env"
-        env_file.write_text("JWT_SECRET=\nMEILI_MASTER_KEY=key\nMONGO_ROOT_PASSWORD=pass\nMONGO_APP_PASSWORD=app\nPOSTGRES_PASSWORD=pg\n", encoding="utf-8")
-        with patch.object(preflight, "ENV_PATH", env_file):
-            with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
-                with patch("sys.stderr", new=io.StringIO()):
-                    with self.assertRaises(SystemExit) as cm:
-                        preflight.check_env()
-                    self.assertEqual(cm.exception.code, 1)
+    def _create_valid_env_content(self, overrides=None):
+        base = {
+            "JWT_SECRET": "a" * 64,
+            "JWT_REFRESH_SECRET": "b" * 64,
+            "CREDS_KEY": "c" * 64,
+            "CREDS_IV": "d" * 32,
+            "MEILI_MASTER_KEY": "e" * 32,
+            "MONGO_ROOT_PASSWORD": "f" * 32,
+            "MONGO_APP_PASSWORD": "g" * 32,
+            "POSTGRES_PASSWORD": "h" * 32,
+            "LITELLM_MASTER_KEY": "i" * 32,
+            "LITELLM_SALT_KEY": "j" * 32,
+        }
+        if overrides:
+            base.update(overrides)
+        lines = [f"{k}={v}" for k, v in base.items()]
+        return "\n".join(lines) + "\n"
 
-    def test_check_env_router_missing_master_key_fails(self):
+    def test_check_env_valid_secrets_succeeds(self):
         env_file = self.tmp_path / ".env"
-        env_file.write_text("COMPOSE_PROFILES=router\nJWT_SECRET=jwt\nMEILI_MASTER_KEY=key\nMONGO_ROOT_PASSWORD=pass\nMONGO_APP_PASSWORD=app\nPOSTGRES_PASSWORD=pg\nLITELLM_MASTER_KEY=\n", encoding="utf-8")
+        env_file.write_text(self._create_valid_env_content(), encoding="utf-8")
         with patch.object(preflight, "ENV_PATH", env_file):
             with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
-                with patch("sys.stderr", new=io.StringIO()):
+                preflight.check_env()
+
+    def test_check_env_missing_jwt_refresh_secret_fails(self):
+        env_file = self.tmp_path / ".env"
+        env_file.write_text(self._create_valid_env_content({"JWT_REFRESH_SECRET": ""}), encoding="utf-8")
+        with patch.object(preflight, "ENV_PATH", env_file):
+            with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
+                with patch("sys.stderr", new=io.StringIO()) as err:
                     with self.assertRaises(SystemExit) as cm:
                         preflight.check_env()
                     self.assertEqual(cm.exception.code, 1)
+                    self.assertIn("JWT_REFRESH_SECRET", err.getvalue())
+
+    def test_check_env_missing_creds_key_fails(self):
+        env_file = self.tmp_path / ".env"
+        env_file.write_text(self._create_valid_env_content({"CREDS_KEY": ""}), encoding="utf-8")
+        with patch.object(preflight, "ENV_PATH", env_file):
+            with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
+                with patch("sys.stderr", new=io.StringIO()) as err:
+                    with self.assertRaises(SystemExit) as cm:
+                        preflight.check_env()
+                    self.assertEqual(cm.exception.code, 1)
+                    self.assertIn("CREDS_KEY", err.getvalue())
+
+    def test_check_env_invalid_creds_key_length_or_format_fails(self):
+        env_file = self.tmp_path / ".env"
+        env_file.write_text(self._create_valid_env_content({"CREDS_KEY": "1234invalidhex"}), encoding="utf-8")
+        with patch.object(preflight, "ENV_PATH", env_file):
+            with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
+                with patch("sys.stderr", new=io.StringIO()) as err:
+                    with self.assertRaises(SystemExit) as cm:
+                        preflight.check_env()
+                    self.assertEqual(cm.exception.code, 1)
+                    self.assertIn("CREDS_KEY must be a 64-character hex string", err.getvalue())
+                    self.assertNotIn("1234invalidhex", err.getvalue())
+
+    def test_check_env_invalid_creds_iv_length_or_format_fails(self):
+        env_file = self.tmp_path / ".env"
+        env_file.write_text(self._create_valid_env_content({"CREDS_IV": "1234invalidiv"}), encoding="utf-8")
+        with patch.object(preflight, "ENV_PATH", env_file):
+            with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
+                with patch("sys.stderr", new=io.StringIO()) as err:
+                    with self.assertRaises(SystemExit) as cm:
+                        preflight.check_env()
+                    self.assertEqual(cm.exception.code, 1)
+                    self.assertIn("CREDS_IV must be a 32-character hex string", err.getvalue())
+                    self.assertNotIn("1234invalidiv", err.getvalue())
+
+    def test_check_env_router_missing_salt_key_fails(self):
+        env_file = self.tmp_path / ".env"
+        content = self._create_valid_env_content({"LITELLM_SALT_KEY": ""}) + "COMPOSE_PROFILES=router\n"
+        env_file.write_text(content, encoding="utf-8")
+        with patch.object(preflight, "ENV_PATH", env_file):
+            with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
+                with patch("sys.stderr", new=io.StringIO()) as err:
+                    with self.assertRaises(SystemExit) as cm:
+                        preflight.check_env()
+                    self.assertEqual(cm.exception.code, 1)
+                    self.assertIn("LITELLM_SALT_KEY", err.getvalue())
 
     def test_check_env_shell_env_overrides_compose_profiles(self):
         env_file = self.tmp_path / ".env"
-        env_file.write_text("COMPOSE_PROFILES=standalone\nJWT_SECRET=jwt\nMEILI_MASTER_KEY=key\nMONGO_ROOT_PASSWORD=pass\nMONGO_APP_PASSWORD=app\nPOSTGRES_PASSWORD=pg\nLITELLM_MASTER_KEY=\n", encoding="utf-8")
+        content = self._create_valid_env_content({"LITELLM_SALT_KEY": ""}) + "COMPOSE_PROFILES=standalone\n"
+        env_file.write_text(content, encoding="utf-8")
         with patch.object(preflight, "ENV_PATH", env_file):
             with patch.object(preflight, "ENV_EXAMPLE_PATH", env_file):
                 with patch.dict(os.environ, {"COMPOSE_PROFILES": "router"}):
-                    with patch("sys.stderr", new=io.StringIO()):
+                    with patch("sys.stderr", new=io.StringIO()) as err:
                         with self.assertRaises(SystemExit) as cm:
                             preflight.check_env()
                         self.assertEqual(cm.exception.code, 1)
+                        self.assertIn("LITELLM_SALT_KEY", err.getvalue())
 
     def test_check_ports_same_project_vs_conflict(self):
         env_file = self.tmp_path / ".env"
         env_file.write_text("COMPOSE_PROFILES=standalone\n", encoding="utf-8")
         with patch.object(preflight, "ENV_PATH", env_file):
             with patch.object(preflight, "is_project_container_running", return_value=True):
-                # Probing sockets won't throw when mocked or on loopback
                 preflight.check_ports()
 
 
