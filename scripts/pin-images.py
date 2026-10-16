@@ -27,45 +27,105 @@ OVERRIDE_PATH = ROOT / "docker-compose.override.yml"
 LOCK_PATH = ROOT / "image-lock.json"
 
 
+def load_compose_services() -> dict[str, str]:
+    """Resolve active Compose services and their interpolated image names without loading docker-compose.override.yml."""
+    cmd = ["docker", "compose", "-f", str(COMPOSE_PATH), "config", "--format", "json"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        die(f"docker compose config failed:\n{res.stderr.strip()}")
+    try:
+        doc = json.loads(res.stdout)
+    except Exception as exc:
+        die(f"failed to parse docker compose config JSON output: {exc}")
+
+    services = doc.get("services", {})
+    images = {}
+    for name, spec in services.items():
+        img = spec.get("image")
+        if img:
+            images[name] = img
+    return images
+
+
+def normalize_repo(image: str) -> str:
+    """Extract repository string without tag or digest."""
+    if "@" in image:
+        image = image.split("@", 1)[0]
+    if ":" in image and "/" in image:
+        last_slash = image.rfind("/")
+        last_colon = image.rfind(":")
+        if last_colon > last_slash:
+            return image[:last_colon]
+        return image
+    elif ":" in image:
+        return image.split(":", 1)[0]
+    return image
+
+
+def match_repo_digest(image: str, digests: list[str]) -> str:
+    if not digests:
+        die(f"no RepoDigests found for {image}")
+
+    repo = normalize_repo(image)
+
+    # Exact match on repo + "@"
+    for d in digests:
+        if d.startswith(repo + "@"):
+            return d
+
+    # Canonical Docker Hub library expansion
+    if "/" not in repo:
+        canonical_docker_repo = f"docker.io/library/{repo}"
+        for d in digests:
+            if d.startswith(canonical_docker_repo + "@"):
+                return d
+
+    # Exact repository match without registry prefix
+    for d in digests:
+        d_repo = d.split("@")[0]
+        if d_repo == repo or (d_repo.endswith("/" + repo) and "/" not in repo):
+            return d
+
+    die(f"no matching RepoDigest found for {image} in {digests}")
+
+
 def resolve_digest(image: str) -> str:
     print(f"pulling {image} ...")
     pull = subprocess.run(["docker", "pull", "--quiet", image], capture_output=True, text=True)
     if pull.returncode != 0:
-        die(f"docker pull failed for {image}:\n{pull.stderr}")
+        die(f"docker pull failed for {image}:\n{pull.stderr.strip()}")
+
     inspect = subprocess.run(
         ["docker", "image", "inspect", image, "--format", "{{join .RepoDigests \",\"}}"],
         capture_output=True, text=True,
     )
     if inspect.returncode != 0 or not inspect.stdout.strip():
         die(f"could not read RepoDigests for {image}; is it a registry image?")
-    digests = inspect.stdout.strip().split(",")
-    # Prefer a digest reference matching this image's own repository.
-    repo = image.split(":")[0]
-    for d in digests:
-        if d.startswith(repo + "@"):
-            return d
-    return digests[0]
+
+    digests = [d.strip() for d in inspect.stdout.strip().split(",") if d.strip()]
+    return match_repo_digest(image, digests)
 
 
 def main() -> None:
-    doc = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
-    services = doc.get("services", {})
+    service_images = load_compose_services()
+    if not service_images:
+        die("no service images found to pin")
 
     lock: dict[str, str] = {}
     override_services: dict[str, dict] = {}
 
-    for name, spec in services.items():
-        image = spec.get("image")
-        if not image:
-            continue
+    for name, image in service_images.items():
         digest_ref = resolve_digest(image)
         lock[name] = digest_ref
         override_services[name] = {"image": digest_ref}
 
-    OVERRIDE_PATH.write_text(
+    tmp_override = OVERRIDE_PATH.with_suffix(".tmp")
+    tmp_lock = LOCK_PATH.with_suffix(".tmp")
+
+    tmp_override.write_text(
         yaml.safe_dump({"services": override_services}, sort_keys=False), encoding="utf-8"
     )
-    LOCK_PATH.write_text(
+    tmp_lock.write_text(
         json.dumps(
             {"resolved_at": datetime.now(timezone.utc).isoformat(), "images": lock},
             indent=2,
@@ -74,6 +134,10 @@ def main() -> None:
         + "\n",
         encoding="utf-8",
     )
+
+    tmp_override.replace(OVERRIDE_PATH)
+    tmp_lock.replace(LOCK_PATH)
+
     print(f"wrote {OVERRIDE_PATH}")
     print(f"wrote {LOCK_PATH}")
     print("review each image's release notes/advisories before relying on this lock in production")
