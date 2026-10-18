@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -87,17 +88,28 @@ def check_env() -> None:
 
     required_secrets = [
         "JWT_SECRET",
+        "JWT_REFRESH_SECRET",
+        "CREDS_KEY",
+        "CREDS_IV",
         "MEILI_MASTER_KEY",
         "MONGO_ROOT_PASSWORD",
         "MONGO_APP_PASSWORD",
         "POSTGRES_PASSWORD",
     ]
     if "router" in profiles:
-        required_secrets.append("LITELLM_MASTER_KEY")
+        required_secrets.extend(["LITELLM_MASTER_KEY", "LITELLM_SALT_KEY"])
 
     for secret in required_secrets:
         if not values.get(secret):
             fail(f".env variable {secret} is missing or blank; run: python3 scripts/init-env.py")
+
+    creds_key = values.get("CREDS_KEY", "")
+    if len(creds_key) != 64 or not re.fullmatch(r"[0-9a-fA-F]{64}", creds_key):
+        fail(".env variable CREDS_KEY must be a 64-character hex string (32 bytes)")
+
+    creds_iv = values.get("CREDS_IV", "")
+    if len(creds_iv) != 32 or not re.fullmatch(r"[0-9a-fA-F]{32}", creds_iv):
+        fail(".env variable CREDS_IV must be a 32-character hex string (16 bytes)")
 
 
 def is_project_container_running(service_name: str) -> bool:
