@@ -93,6 +93,12 @@ class CompileLitellmTests(unittest.TestCase):
         self.assertEqual(doc["model_list"], [])
         self.assertEqual(doc["router_settings"]["fallbacks"], [])
 
+    def test_alias_omitted_when_no_candidates_available(self):
+        doc = configure.compile_litellm(ENV, providers={"anthropic", "deepseek"})
+        names = {e["model_name"] for e in doc["model_list"]}
+        self.assertIn("coding", names)
+        self.assertNotIn("research", names)
+
 
 if __name__ == "__main__":
     unittest.main()
