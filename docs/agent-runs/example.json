@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "runId": "synthetic-run-0001",
+  "revision": 5,
+  "repository": "example/project",
+  "title": "Synthetic cross-project handover",
+  "agent": "manual",
+  "state": "completed",
+  "phase": "complete",
+  "updatedAt": "2026-10-18T00:00:00.000Z",
+  "nextAction": "Review requirements before deploying",
+  "budget": {
+    "capMicrousd": 1000000,
+    "spentMicrousd": 0,
+    "reservedMicrousd": 0
+  },
+  "evidence": [
+    {
+      "label": "Local unit tests",
+      "sha256": "34d38be4589f616bc8a1a3c2986ea442601c04799a27f8676c0c1b4d940d5eec",
+      "passed": true,
+      "exitCode": 0
+    }
+  ]
+}
