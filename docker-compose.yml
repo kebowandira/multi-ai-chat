@@ -3,7 +3,6 @@ name: multi-ai-chat
 networks:
   edge:
   backend:
-    internal: true
 
 volumes:
   mongo_data:
@@ -175,3 +174,15 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  lightpanda:
+    image: lightpanda/browser:latest
+    restart: unless-stopped
+    networks: [backend]
+    command: ["/bin/lightpanda", "mcp", "--host", "0.0.0.0", "--port", "8765"]
+    healthcheck:
+      test: ["CMD", "/bin/lightpanda", "version"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

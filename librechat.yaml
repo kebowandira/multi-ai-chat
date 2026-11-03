@@ -26,6 +26,18 @@ mcpServers:
     args:
       - "/app/mcp_modules/agy-mcp-server.mjs"
 
+  lightpanda:
+    type: "stdio"
+    command: "node"
+    args:
+      - "/app/mcp_modules/lightpanda-mcp-server.mjs"
+
+  scraper:
+    type: "stdio"
+    command: "node"
+    args:
+      - "/app/mcp_modules/scraper-mcp-server.mjs"
+
   github:
     type: "stdio"
     command: "node"
