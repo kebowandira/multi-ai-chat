@@ -68,8 +68,10 @@ services:
         condition: service_healthy
       meilisearch:
         condition: service_healthy
+      litellm:
+        condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3080/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3080/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -113,6 +115,7 @@ services:
   vectordb:
     image: ankane/pgvector:v0.5.1
     restart: unless-stopped
+    profiles: ["rag"]
     networks: [backend]
     environment:
       POSTGRES_DB: rag
@@ -129,6 +132,7 @@ services:
   rag_api:
     image: ${RAG_IMAGE:-ghcr.io/danny-avila/librechat-rag-api-dev:latest}
     restart: unless-stopped
+    profiles: ["rag"]
     networks: [backend]
     env_file:
       - path: ./.env
@@ -155,7 +159,6 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
     restart: unless-stopped
-    profiles: ["router"]
     networks: [backend]
     env_file:
       - path: ./.env
@@ -165,10 +168,9 @@ services:
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
     volumes:
       - ./runtime/litellm_config.yaml:/app/config.yaml:ro
-      - ./router:/app/router:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health/liveliness"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
       interval: 20s
       timeout: 5s
       retries: 10

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NL1 Memory Drop Box</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0b0f19;
+    color: #e6edf3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  .card {
+    background: #161b26;
+    border: 1px solid #2d3748;
+    border-radius: 16px;
+    padding: 36px;
+    max-width: 540px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+  }
+  .badge {
+    display: inline-block;
+    background: rgba(88, 166, 255, 0.15);
+    color: #58a6ff;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  h1 { font-size: 22px; margin-bottom: 8px; color: #ffffff; }
+  p { font-size: 14px; color: #8b949e; margin-bottom: 24px; line-height: 1.5; }
+  .drop-zone {
+    border: 2px dashed #30363d;
+    border-radius: 12px;
+    padding: 40px 20px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: #0d1117;
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: #58a6ff;
+    background: rgba(88, 166, 255, 0.08);
+    transform: translateY(-2px);
+  }
+  .drop-zone svg { width: 52px; height: 52px; fill: #58a6ff; margin-bottom: 12px; }
+  .drop-zone .hint { font-size: 13px; color: #8b949e; margin-top: 6px; }
+  input[type="file"] { display: none; }
+  #status { margin-top: 20px; font-size: 14px; min-height: 24px; }
+  .success { color: #3fb950; font-weight: 600; }
+  .file-list {
+    margin-top: 28px;
+    text-align: left;
+    border-top: 1px solid #2d3748;
+    padding-top: 20px;
+  }
+  .file-list h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: #8b949e; margin-bottom: 12px; }
+  .file-item {
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background: #0d1117;
+    border: 1px solid #2d3748;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .file-size { color: #8b949e; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="badge">NL1 Server Upload</div>
+  <h1>Memory & Data Drop Box</h1>
+  <p>Drop your exported JSON, ZIP, or text files from ChatGPT, Claude, or Gemini here. They are saved directly into the LibreChat memory directory.</p>
+  
+  <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+    <div style="font-weight: 600;">Click to browse or Drag &amp; Drop here</div>
+    <div class="hint">Supports .json, .zip, .txt, .md, .csv (any size)</div>
+    <input type="file" id="fileInput" multiple>
+  </div>
+  
+  <div id="status"></div>
+  
+  <div class="file-list">
+    <h3>Files on NL1 Server:</h3>
+    <div id="filesContainer"><span style="color:#8b949e">Checking...</span></div>
+  </div>
+</div>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const statusDiv = document.getElementById('status');
+const filesContainer = document.getElementById('filesContainer');
+
+function loadFiles() {
+  fetch('/drop-box/list')
+    .then(r => r.json())
+    .then(files => {
+      if (!files || files.length === 0) {
+        filesContainer.innerHTML = '<span style="color:#8b949e; font-size:13px;">No files uploaded yet</span>';
+        return;
+      }
+      filesContainer.innerHTML = files.map(f => `
+        <div class="file-item">
+          <span>📁 ${f.name}</span>
+          <span class="file-size">${(f.size / 1024).toFixed(1)} KB</span>
+        </div>
+      `).join('');
+    })
+    .catch(() => {
+      filesContainer.innerHTML = '<span style="color:#f85149; font-size:13px;">Failed to load files</span>';
+    });
+}
+loadFiles();
+
+['dragenter', 'dragover'].forEach(e => dropZone.addEventListener(e, (ev) => {
+  ev.preventDefault();
+  dropZone.classList.add('dragover');
+}));
+['dragleave', 'drop'].forEach(e => dropZone.addEventListener(e, (ev) => {
+  ev.preventDefault();
+  dropZone.classList.remove('dragover');
+}));
+dropZone.addEventListener('drop', (ev) => {
+  if (ev.dataTransfer.files.length) uploadFiles(ev.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) uploadFiles(fileInput.files);
+});
+
+function uploadFiles(files) {
+  statusDiv.innerHTML = '<span style="color:#58a6ff">Uploading ' + files.length + ' file(s)...</span>';
+  let formData = new FormData();
+  for (let i = 0; i < files.length; i++) {
+    formData.append('files', files[i]);
+  }
+  fetch('/drop-box/upload', { method: 'POST', body: formData })
+    .then(r => r.json())
+    .then(res => {
+      statusDiv.innerHTML = '<span class="success">✓ Successfully uploaded ' + (res.saved ? res.saved.join(', ') : '') + '!</span>';
+      fileInput.value = '';
+      loadFiles();
+    })
+    .catch(err => {
+      statusDiv.innerHTML = '<span style="color:#f85149">Upload failed: ' + err + '</span>';
+    });
+}
+</script>
+</body>
+</html>

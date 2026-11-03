@@ -13,14 +13,45 @@ interface:
   prompts: true
   bookmarks: true
   multiConvo: true
-  agents: false
+  agents: true
 
 registration:
   socialLogins: ["google", "github"]
   allowedDomains: []
 
-rag:
-  apiURL: "http://rag_api:8000"
+mcpServers:
+  agy:
+    type: "stdio"
+    command: "node"
+    args:
+      - "/app/mcp_modules/agy-mcp-server.mjs"
+
+  github:
+    type: "stdio"
+    command: "node"
+    args:
+      - "/app/mcp_modules/@modelcontextprotocol/server-github/dist/index.js"
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
+
+  memory:
+    type: "stdio"
+    command: "node"
+    args:
+      - "/app/mcp_modules/node_modules/@modelcontextprotocol/server-memory/dist/index.js"
+
+  sequential-thinking:
+    type: "stdio"
+    command: "node"
+    args:
+      - "/app/mcp_modules/node_modules/@modelcontextprotocol/server-sequential-thinking/dist/index.js"
+
+  filesystem:
+    type: "stdio"
+    command: "node"
+    args:
+      - "/app/mcp_modules/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js"
+      - "/app/uploads"
 
 endpoints:
   openAI:
@@ -37,8 +68,27 @@ endpoints:
     titleConvo: true
     titleModel: "current_model"
     modelDisplayLabel: "Gemini"
+    models:
+      default:
+        - "gemini-3.6-flash"
+        - "gemini-3.5-flash-lite"
+        - "gemini-3.8-flash"
+        - "gemini-3.5-flash"
+        - "gemini-3.1-flash-lite"
+        - "gemini-3.1-pro-preview"
+      fetch: false
 
   custom:
+    # Gemini 4-Account Pool via LiteLLM
+    - name: "Gemini 4-Account Pool"
+      apiKey: "sk-litellm-internal"
+      baseURL: "http://litellm:4000/v1"
+      models:
+        default: ["gemini-pro", "gemini-flash"]
+        fetch: false
+      titleModel: "gemini-flash"
+      dropParams: ["stop"]
+
     # DeepSeek — official OpenAI-compatible API
     - name: "DeepSeek"
       apiKey: "${DEEPSEEK_API_KEY}"
@@ -81,6 +131,54 @@ endpoints:
       titleConvo: true
       titleModel: "current_model"
       modelDisplayLabel: "Grok"
+
+    # Meta — dev.meta.ai Model API (OpenAI-compatible)
+    - name: "Meta"
+      apiKey: "${META_API_KEY}"
+      baseURL: "${META_BASE_URL}"
+      models:
+        default: ["${META_MODEL}"]
+        fetch: true
+      titleConvo: true
+      titleModel: "current_model"
+      modelDisplayLabel: "Meta"
+
+    # Groq — ultra-fast LPU inference (free tier available at console.groq.com)
+    - name: "Groq"
+      apiKey: "${GROQ_API_KEY}"
+      baseURL: "https://api.groq.com/openai/v1"
+      models:
+        default: ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+        fetch: false
+      titleConvo: true
+      titleModel: "current_model"
+      modelDisplayLabel: "Groq"
+
+    # OpenRouter — multi-provider routing (free tier available at openrouter.ai)
+    - name: "OpenRouter"
+      apiKey: "${OPENROUTER_API_KEY}"
+      baseURL: "https://openrouter.ai/api/v1"
+      models:
+        default: ["nvidia/nemotron-3.5-super-vl:free", "xingchen-agi/xing4.0-29b-a4b:free", "dots-studio/dots-3-note-preview:free"]
+        fetch: false
+      titleConvo: true
+      titleModel: "current_model"
+      modelDisplayLabel: "OpenRouter"
+
+    # NVIDIA — official OpenAI-compatible NIM free endpoints (build.nvidia.com)
+    - name: "NVIDIA"
+      apiKey: "${NVIDIA_API_KEY}"
+      baseURL: "https://integrate.api.nvidia.com/v1"
+      models:
+        default:
+          - "nvidia/nemotron-3-ultra-550b-a55b"
+          - "poolside/laguna-xs-2.1"
+          - "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+          - "nvidia/nemotron-3.5-bolt-e4b"
+        fetch: false
+      titleConvo: true
+      titleModel: "current_model"
+      modelDisplayLabel: "NVIDIA"
 
     # SmartRouter — LiteLLM gateway aliases (only present when COMPOSE_PROFILES=router)
     - name: "SmartRouter"

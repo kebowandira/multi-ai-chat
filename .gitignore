@@ -15,3 +15,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.swp
+mongo-keyfile
+imported_memories/
+mcp_modules/node_modules/
+mcp_modules/@modelcontextprotocol/*/node_modules/

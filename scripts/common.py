@@ -68,6 +68,10 @@ PROVIDER_KEYS = {
     "qwen": "DASHSCOPE_API_KEY",
     "zai": "ZAI_API_KEY",
     "xai": "XAI_API_KEY",
+    "meta": "META_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
 }
 
 
