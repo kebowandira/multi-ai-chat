@@ -19,7 +19,16 @@ registration:
   socialLogins: ["google", "github"]
   allowedDomains: []
 
+mcpSettings:
+  allowedAddresses:
+    - "10.77.0.11:8766"
+    - "172.18.0.1:8766"
+
 mcpServers:
+  graphify:
+    type: "streamable-http"
+    url: "http://10.77.0.11:8766/mcp"
+
   agy:
     type: "stdio"
     command: "node"
