@@ -7,9 +7,9 @@
   },
 
   "routes": {
-    "coding": ["claude-code", "deepseek-fast", "openai-main"],
-    "research": ["gemini-flash", "openai-main"],
-    "cheap": ["qwen-turbo", "deepseek-fast", "openai-low-cost", "gemini-flash-lite"]
+    "coding": ["nvidia-laguna", "nvidia-nemotron-ultra", "gemini-3.6-flash", "gemini-3.5-flash-lite", "groq-120b", "openrouter-nemotron", "claude-code", "deepseek-fast", "openai-main"],
+    "research": ["nvidia-nemotron-ultra", "gemini-3.6-flash", "gemini-3.5-flash-lite", "groq-120b", "openrouter-nemotron", "gemini-flash", "openai-main"],
+    "cheap": ["gemini-3.5-flash-lite", "groq-qwen", "openrouter-nemotron", "qwen-turbo", "deepseek-fast", "openai-low-cost", "gemini-flash-lite"]
   },
 
   "default_route": "cheap",

@@ -35,6 +35,13 @@ MODEL_PROVIDER = {
     "qwen-plus": "qwen",
     "glm-manual": "zai",
     "grok-manual": "xai",
+    "gemini-3.6-flash": "google",
+    "gemini-3.5-flash-lite": "google",
+    "groq-120b": "groq",
+    "groq-qwen": "groq",
+    "openrouter-nemotron": "openrouter",
+    "nvidia-nemotron-ultra": "nvidia",
+    "nvidia-laguna": "nvidia",
 }
 
 
@@ -57,10 +64,19 @@ def compile_librechat(env: dict[str, str], providers: set[str], router_enabled: 
         "Qwen": "qwen",
         "Z.ai": "zai",
         "xAI": "xai",
+        "Meta": "meta",
+        "Groq": "groq",
+        "OpenRouter": "openrouter",
+        "NVIDIA": "nvidia",
         "SmartRouter": None,  # gated on router_enabled, not a provider key
+        "Gemini 4-Account Pool": "always",
+        "Gemini 5-Account Pool": "always",
     }
     for entry in custom:
         provider = name_to_provider.get(entry.get("name"))
+        if provider == "always":
+            kept.append(substitute(entry, env))
+            continue
         if entry.get("name") == "SmartRouter":
             if not router_enabled:
                 continue
@@ -68,39 +84,45 @@ def compile_librechat(env: dict[str, str], providers: set[str], router_enabled: 
             continue
         kept.append(substitute(entry, env))
     doc["endpoints"]["custom"] = kept
+    if "mcpServers" in doc:
+        if not env.get("GITHUB_TOKEN"):
+            doc["mcpServers"].pop("github", None)
+        doc["mcpServers"] = substitute(doc["mcpServers"], env)
     return doc
 
 
-def compile_litellm(env: dict[str, str], providers: set[str]) -> dict:
+def compile_litellm(env: dict[str, str], providers: set[str], router_enabled: bool = False) -> dict:
     doc = yaml.safe_load(LITELLM_SRC.read_text(encoding="utf-8"))
-    policy = _load_policy()
 
     model_list = []
     for entry in doc.get("model_list", []):
-        name = entry["model_name"]
+        name = entry.get("model_name")
         provider = MODEL_PROVIDER.get(name)
         if provider is not None and provider not in providers:
             continue
         model_list.append(substitute(entry, env))
 
-    available_names = {e["model_name"] for e in model_list}
-    fallbacks = []
-    for route, candidates in policy["routes"].items():
-        filtered = [m for m in candidates if m in available_names]
-        if not filtered:
-            continue
-        primary = next(e for e in model_list if e["model_name"] == filtered[0])
-        model_list.append({"model_name": route, "litellm_params": copy.deepcopy(primary["litellm_params"])})
-        if len(filtered) > 1:
-            fallbacks.append({route: filtered[1:]})
+    if router_enabled:
+        policy = _load_policy()
+        available_names = {e["model_name"] for e in model_list}
+        fallbacks = []
+        for route, candidates in policy["routes"].items():
+            filtered = [m for m in candidates if m in available_names]
+            if not filtered:
+                continue
+            primary = next(e for e in model_list if e["model_name"] == filtered[0])
+            model_list.append({"model_name": route, "litellm_params": copy.deepcopy(primary["litellm_params"])})
+            if len(filtered) > 1:
+                fallbacks.append({route: filtered[1:]})
 
-    default_route = policy["default_route"]
-    if default_route in {e["model_name"] for e in model_list} and "auto" not in {e["model_name"] for e in model_list}:
-        primary = next(e for e in model_list if e["model_name"] == default_route)
-        model_list.append({"model_name": "auto", "litellm_params": copy.deepcopy(primary["litellm_params"])})
+        default_route = policy["default_route"]
+        if default_route in {e["model_name"] for e in model_list} and "auto" not in {e["model_name"] for e in model_list}:
+            primary = next(e for e in model_list if e["model_name"] == default_route)
+            model_list.append({"model_name": "auto", "litellm_params": copy.deepcopy(primary["litellm_params"])})
+
+        doc.setdefault("router_settings", {})["fallbacks"] = fallbacks
 
     doc["model_list"] = model_list
-    doc.setdefault("router_settings", {})["fallbacks"] = fallbacks
     return doc
 
 
@@ -124,21 +146,15 @@ def main() -> None:
         yaml.safe_dump(librechat_doc, sort_keys=False, allow_unicode=True), encoding="utf-8"
     )
 
-    if router_enabled:
-        litellm_doc = compile_litellm(env, providers)
-        (RUNTIME_DIR / "litellm_config.yaml").write_text(
-            yaml.safe_dump(litellm_doc, sort_keys=False, allow_unicode=True), encoding="utf-8"
-        )
-    else:
-        stale = RUNTIME_DIR / "litellm_config.yaml"
-        if stale.exists():
-            stale.unlink()
+    litellm_doc = compile_litellm(env, providers, router_enabled)
+    (RUNTIME_DIR / "litellm_config.yaml").write_text(
+        yaml.safe_dump(litellm_doc, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
 
     print(f"providers active: {', '.join(sorted(providers)) or '(none)'}")
     print(f"router (LiteLLM): {'enabled' if router_enabled else 'disabled'}")
     print(f"wrote {RUNTIME_DIR / 'librechat.yaml'}")
-    if router_enabled:
-        print(f"wrote {RUNTIME_DIR / 'litellm_config.yaml'}")
+    print(f"wrote {RUNTIME_DIR / 'litellm_config.yaml'}")
 
 
 if __name__ == "__main__":

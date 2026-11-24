@@ -1,7 +1,7 @@
 # Combined Router & Deployment Integration Validation Report
 
 - **Assignment Date**: 16 October 2026 (WIB)
-- **Base Integration Branch**: `chatmerge`
+- **Base Integration Branch**: `chatplan` (historical reference `chatmerge` did not host the combined commit; combined source appeared on PR #5 / `chatplan` at `cd701216c14182f7f9febb71db5b332e1af1e715`)
 - **Router Source SHA**: `b599ad357175b5df9082cc8ae8755712c75ad160` (PR #2 on `review/router-accepted-20261016`)
 - **Deployment Source SHA**: `e14c0b3e11ccd8b6c720663262175e85c88dff84` / `b2c0dfd5d78b0fc410b68ae2ea0f4dd33926ba2d` (PR #5)
 - **Environment**: Python 3.12.13, Simulated Docker Harness
@@ -14,7 +14,7 @@
 - `router/policy.py`: `cb4e207b24a6902f474eb85b274289ef406fa81ab98236601c7005186054f09a`
 - `router/custom_router.py`: `4466bdebcf9708eefe3a61aa2cea0e4d77cc5b06644d45890e00ad55c0184f4d`
 - `tests/test_policy.py`: `2d2ef8fb3ffc76562afad686211dac43909ae0d2c40fb2d5ace823c555bc83b2`
-- `tests/test_config.py`: `b2d00b1b0ae08dbb45d8d2aae95fd25bcd48da458f81dbb87ad9c7a5cca67e5c1`
+- `tests/test_config.py`: `b2d00b1b0ae08dbb45d8d2aae95fd25bcd48da458f81185e80d87f8096094191`
 - `tests/integration_gateway.py`: `b2e0e88e6aefe0e341dcc7170087166a26b7498d2552b0f3f5bc450676c7a697`
 - `docs/reviews/JULES_ROUTER_VALIDATION_2026-10-15.md`: `efdfe952ed532cb9516b37ca491064a49667a0138736a1106e643fd2f187e4a7`
 
