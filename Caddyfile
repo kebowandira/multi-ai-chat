@@ -15,3 +15,53 @@
 		format console
 	}
 }
+
+# Graphify live dashboard (pure Python service on the host, see ~/.config/systemd/user/graphify-dashboard.service).
+# Login is built into the app (one-time password, forced change); see infra/graphify-dashboard/README.md in bule-ai-os.
+dash.gord.my.id {
+	encode zstd gzip
+	header {
+		X-Robots-Tag "noindex, nofollow"
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+	}
+	# Live graph uses Server-Sent Events: pass them through unbuffered.
+	reverse_proxy 172.18.0.1:8780 {
+		flush_interval -1
+	}
+	log {
+		output stdout
+		format console
+	}
+}
+
+# Public portfolio (static, indexable). Caddy serves the files itself from a read-only mount of
+# ~/.local/share/portfolio-site/www (docker-compose.override.yml); see DEPLOY.md in kebowandira/portfolio-site.
+# The script-src hash allows the one inline script in index.html; if that script changes, update the hash (DEPLOY.md).
+portfolio.bule.my.id {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com 'sha256-q4RaMr2+WL1XiqV8O93qNqRCT4o+hZxGbRCZ2EN+J90='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+	handle /.well-known/security.txt {
+		header Content-Type "text/plain; charset=utf-8"
+		respond <<TXT
+			Contact: mailto:yohanes.lelono@gmail.com
+			Expires: 2027-11-25T00:00:00.000Z
+			Preferred-Languages: en, id
+			Canonical: https://portfolio.bule.my.id/.well-known/security.txt
+			TXT 200
+	}
+	handle {
+		root * /srv/portfolio
+		file_server {
+			hide .*
+		}
+	}
+}
